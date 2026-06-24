@@ -286,6 +286,7 @@ func _autobake() -> void:
 
 	var sun := DirectionalLight3D.new()
 	sun.name = "Sun"; sun.light_energy = 4.0
+	sun.light_bake_mode = Light3D.BAKE_STATIC
 	sun.rotation = Vector3(deg_to_rad(-55), deg_to_rad(35), 0)
 	root.add_child(sun); sun.owner = root
 

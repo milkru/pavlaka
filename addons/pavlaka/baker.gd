@@ -59,6 +59,12 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 	DirAccess.make_dir_recursive_absolute("user://pavlaka_tmp")
 	var glb_abs := ProjectSettings.globalize_path("user://pavlaka_tmp/scene.glb")
 	var export_root := _build_export_scene(root)
+	var n_lights := 0
+	for c in export_root.get_children():
+		if c is Light3D:
+			n_lights += 1
+	if n_lights == 0:
+		print("pavlaka: no Static lights found — baking ambient only. Set a light's Bake Mode to Static to include it in the bake.")
 	var doc := GLTFDocument.new()
 	var state := GLTFState.new()
 	var err := doc.append_from_scene(export_root, state)
@@ -232,7 +238,7 @@ static func _gather_into(node: Node, export_root: Node3D) -> void:
 			copy.transform = mi.global_transform
 			export_root.add_child(copy)
 			copy.owner = export_root
-		elif c is Light3D and (c as Light3D).is_visible_in_tree():
+		elif c is Light3D and (c as Light3D).is_visible_in_tree() and (c as Light3D).light_bake_mode == Light3D.BAKE_STATIC:
 			var lcopy: Light3D = (c as Light3D).duplicate()
 			lcopy.transform = (c as Light3D).global_transform
 			export_root.add_child(lcopy)
