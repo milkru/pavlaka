@@ -48,6 +48,10 @@ func _enter_tree() -> void:
 
 	# drive button visibility from the editor selection (reliable across selections)
 	EditorInterface.get_selection().selection_changed.connect(_on_selection_changed)
+	# also re-evaluate the button when project settings change (e.g. the Blender path is
+	# edited/cleared while the node stays selected), so it reflects path validity live
+	if not ProjectSettings.settings_changed.is_connected(_update_button):
+		ProjectSettings.settings_changed.connect(_update_button)
 	_on_selection_changed()
 
 	if OS.get_environment("PAVLAKA_AUTOBAKE") != "":
@@ -58,6 +62,8 @@ func _exit_tree() -> void:
 	var sel := EditorInterface.get_selection()
 	if sel.selection_changed.is_connected(_on_selection_changed):
 		sel.selection_changed.disconnect(_on_selection_changed)
+	if ProjectSettings.settings_changed.is_connected(_update_button):
+		ProjectSettings.settings_changed.disconnect(_update_button)
 	if _btn:
 		remove_control_from_container(CONTAINER_SPATIAL_EDITOR_MENU, _btn)
 		_btn.queue_free()
