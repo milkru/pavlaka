@@ -117,16 +117,16 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 	# not know them yet (esp. after the folder was deleted/recreated). update_file alone
 	# fails for brand-new files; a full scan reliably registers + imports them.
 	var efs := EditorInterface.get_resource_filesystem()
-	var slice_paths := PackedStringArray()
 	for m in baked_meshes:
 		var p: String = out_dir.path_join("baked_%d.exr" % int(m["slice_index"]))
 		_write_exr_import(p)
-		slice_paths.append(p)
 		efs.update_file(p)
-	# Make the editor discover + import the freshly written files. In the GUI, load()
-	# only resolves already-imported source files, so we must wait for the scan to
-	# actually finish (esp. after the folder was deleted). Connect BEFORE scanning so we
-	# can't miss the completion signal; wait on it (frame budget guards against a hang).
+	# Make the editor discover + (re)import the freshly written/overwritten files. In the
+	# GUI, load() only resolves already-imported source files, so we must wait for the
+	# scan to actually finish (esp. after the folder was deleted). Connect BEFORE scanning
+	# so we can't miss the completion signal; wait on it (frame budget guards a hang).
+	# The scan imports the files itself — calling reimport_files here would run while the
+	# scan is still importing and trip the "recursive reimport" guard, so we don't.
 	var scanned := [false]
 	var on_changed := func(): scanned[0] = true
 	efs.filesystem_changed.connect(on_changed)
@@ -137,7 +137,6 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 		frames += 1
 	if efs.filesystem_changed.is_connected(on_changed):
 		efs.filesystem_changed.disconnect(on_changed)
-	efs.reimport_files(slice_paths)
 
 	var textures: Array = []
 	textures.resize(baked_meshes.size())
@@ -260,6 +259,10 @@ static func _find(targets: Array[Target], mesh_name: String) -> Target:
 
 
 static func _write_exr_import(exr_res_path: String) -> void:
+	# Keep an existing .import as-is so its assigned UID stays stable across re-bakes
+	# (otherwise scenes/.lmbake that reference the old UID warn and fall back to path).
+	if FileAccess.file_exists(exr_res_path + ".import"):
+		return
 	var f := FileAccess.open(exr_res_path + ".import", FileAccess.WRITE)
 	f.store_string("""[remap]
 
