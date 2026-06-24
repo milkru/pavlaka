@@ -133,11 +133,21 @@ def main():
     scene.cycles.samples = SAMPLES
     scene.world = bpy.data.worlds.new("World")
     scene.world.use_nodes = True
-    bg = scene.world.node_tree.nodes["Background"]
-    # A new world's Background color defaults to near-black, so set a real color so
-    # AMBIENT controls actual dome brightness (color * AMBIENT).
-    bg.inputs[0].default_value = (AMBIENT_RGB[0], AMBIENT_RGB[1], AMBIENT_RGB[2], 1.0)
-    bg.inputs[1].default_value = AMBIENT
+    wnt = scene.world.node_tree
+    bg = wnt.nodes["Background"]
+    sky = PARAMS.get("sky_panorama", "")
+    if sky and os.path.exists(sky):
+        # use the scene's baked WorldEnvironment sky as an equirect world texture
+        env_tex = wnt.nodes.new("ShaderNodeTexEnvironment")
+        env_tex.image = bpy.data.images.load(sky)
+        wnt.links.new(env_tex.outputs["Color"], bg.inputs[0])
+        bg.inputs[1].default_value = 1.0
+        out("PAVLAKA_BAKE: using scene sky panorama")
+    else:
+        # flat ambient dome (a new world's Background color defaults to near-black, so
+        # set a real color and let AMBIENT control dome brightness)
+        bg.inputs[0].default_value = (AMBIENT_RGB[0], AMBIENT_RGB[1], AMBIENT_RGB[2], 1.0)
+        bg.inputs[1].default_value = AMBIENT
 
     # override imported lights with the Godot light's actual energy (x scale) and color
     for obj in bpy.data.objects:

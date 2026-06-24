@@ -290,6 +290,15 @@ func _autobake() -> void:
 	sun.rotation = Vector3(deg_to_rad(-55), deg_to_rad(35), 0)
 	root.add_child(sun); sun.owner = root
 
+	var we := WorldEnvironment.new()
+	we.name = "WorldEnvironment"
+	var env := Environment.new()
+	env.background_mode = Environment.BG_SKY
+	env.sky = Sky.new()
+	env.sky.sky_material = ProceduralSkyMaterial.new()
+	we.environment = env
+	root.add_child(we); we.owner = root
+
 	var lm := LightmapBlenderGI.new(); lm.name = "LightmapBlenderGI"
 	root.add_child(lm); lm.owner = root
 

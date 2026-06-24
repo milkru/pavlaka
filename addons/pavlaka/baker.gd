@@ -92,6 +92,7 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 		"ambient_color": [amb.r, amb.g, amb.b],
 		"light_energy_scale": cfg["light_energy_scale"],
 		"lights": lights,
+		"sky_panorama": _bake_sky_panorama(root), # "" when no WorldEnvironment sky
 	}
 	var params_path := "user://pavlaka_tmp/params.json"
 	var pf := FileAccess.open(params_path, FileAccess.WRITE)
@@ -240,6 +241,32 @@ static func _build_export_scene(root: Node) -> Node3D:
 	export_root.name = root.name
 	_gather_into(root, export_root)
 	return export_root
+
+
+# If the scene has a WorldEnvironment with a Sky, bake it to an equirect radiance
+# panorama EXR and return its absolute path (for Blender's world); else "".
+static func _bake_sky_panorama(root: Node) -> String:
+	var env := _find_environment(root)
+	if env == null or env.background_mode != Environment.BG_SKY or env.sky == null:
+		return ""
+	var img := RenderingServer.environment_bake_panorama(env.get_rid(), false, Vector2i(256, 128))
+	if img == null or img.is_empty():
+		return ""
+	var rel := "user://pavlaka_tmp/sky.exr"
+	if img.save_exr(rel) != OK:
+		push_warning("pavlaka: failed to save sky panorama; using flat ambient")
+		return ""
+	return ProjectSettings.globalize_path(rel)
+
+
+static func _find_environment(node: Node) -> Environment:
+	if node is WorldEnvironment and (node as WorldEnvironment).environment != null:
+		return (node as WorldEnvironment).environment
+	for c in node.get_children():
+		var e := _find_environment(c)
+		if e != null:
+			return e
+	return null
 
 
 # collect Static, visible lights' actual energy + linear color (matched by node name in

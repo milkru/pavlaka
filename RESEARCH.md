@@ -40,11 +40,17 @@ bake with a progress dialog + Cancel.
 - **GUI-only bake** — the editor's `ResourceLoader.load` only resolves already-imported
   source files (headless on-demand-imports), so baking must run in the GUI editor.
 
+### Done since
+- Light-energy calibration — each Static light's real energy/color is used, ×
+  `light_energy_scale` (point/spot still need per-type tuning vs Cycles falloff).
+- `WorldEnvironment`/sky → bake — a scene Sky is baked to an equirect panorama
+  (`environment_bake_panorama`) and used as Blender's world; flat ambient dome is the
+  fallback. (Sky rotation not yet applied; minor for low-freq ambient.)
+
 ### Remaining (optional polish)
 
-Light-energy calibration (use each light's real intensity vs the fixed `sun_energy`),
-`WorldEnvironment`/sky → bake, auto-generate UV2 for meshes that lack it, space-efficient
-atlas packing.
+Space-efficient atlas packing (vs one slice per mesh); per-type light scaling + a derived
+default `light_energy_scale`; directional (SH) lightmaps; UV2 still Godot-owned by design.
 
 ## Vision
 
