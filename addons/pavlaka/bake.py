@@ -41,7 +41,13 @@ scene.cycles.device = 'CPU'
 scene.cycles.samples = SAMPLES
 scene.world = bpy.data.worlds.new("World")
 scene.world.use_nodes = True
-scene.world.node_tree.nodes["Background"].inputs[1].default_value = AMBIENT
+_bg = scene.world.node_tree.nodes["Background"]
+# A new world's Background color defaults to near-black (~0.05), so setting only the
+# strength leaves the ambient dome almost black. Set a WHITE color so AMBIENT actually
+# controls dome brightness (white * AMBIENT). With no scene lights this gives a usable
+# ambient/AO bake; with a sun it's just fill light.
+_bg.inputs[0].default_value = (1.0, 1.0, 1.0, 1.0)
+_bg.inputs[1].default_value = AMBIENT
 
 for obj in bpy.data.objects:
     if obj.type == 'LIGHT' and obj.data.type == 'SUN':
