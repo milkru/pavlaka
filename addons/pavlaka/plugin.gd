@@ -28,6 +28,17 @@ func _enter_tree() -> void:
 	})
 	ProjectSettings.set_as_basic(SETTING_BLENDER, true)
 
+	# auto-detect Blender on first install (when the path is still empty). The user can
+	# always change it in Project Settings (e.g. after updating Blender / with multiple).
+	if String(ProjectSettings.get_setting(SETTING_BLENDER, "")).is_empty():
+		var found := _detect_blender()
+		if not found.is_empty():
+			ProjectSettings.set_setting(SETTING_BLENDER, found)
+			ProjectSettings.save()
+			print("pavlaka: auto-detected Blender at: ", found)
+		else:
+			push_warning("pavlaka: no Blender found — set Project Settings → pavlaka/blender_path")
+
 	_btn = Button.new()
 	_btn.text = "Bake with Blender"
 	_btn.pressed.connect(_on_bake_pressed)
@@ -97,6 +108,52 @@ func _blender_path() -> String:
 	return OS.get_environment("PAVLAKA_BLENDER")
 
 
+# Find a Blender executable: first on PATH, then in common install locations.
+func _detect_blender() -> String:
+	var out: Array = []
+	var which := "where" if OS.get_name() == "Windows" else "which"
+	if OS.execute(which, ["blender"], out) == 0 and not out.is_empty():
+		var first := String(out[0]).strip_edges().split("\n")[0].strip_edges()
+		if not first.is_empty() and FileAccess.file_exists(first):
+			return first
+	match OS.get_name():
+		"Windows":
+			return _scan_windows_blender()
+		"macOS":
+			var p := "/Applications/Blender.app/Contents/MacOS/Blender"
+			return p if FileAccess.file_exists(p) else ""
+		_:
+			for p in ["/usr/bin/blender", "/usr/local/bin/blender", "/snap/bin/blender",
+					"/var/lib/flatpak/exports/bin/org.blender.Blender"]:
+				if FileAccess.file_exists(p):
+					return p
+	return ""
+
+
+# Newest "Blender X.Y/blender.exe" under Program Files\Blender Foundation.
+func _scan_windows_blender() -> String:
+	var found := PackedStringArray()
+	var bases := PackedStringArray([
+		"C:/Program Files/Blender Foundation", "C:/Program Files (x86)/Blender Foundation"])
+	for base in bases:
+		var d := DirAccess.open(base)
+		if d == null:
+			continue
+		d.list_dir_begin()
+		var name := d.get_next()
+		while name != "":
+			if d.current_is_dir() and name.begins_with("Blender"):
+				var exe := base.path_join(name).path_join("blender.exe")
+				if FileAccess.file_exists(exe):
+					found.append(exe)
+			name = d.get_next()
+		d.list_dir_end()
+	if found.is_empty():
+		return ""
+	found.sort() # lexicographic; last is the newest-versioned folder
+	return found[found.size() - 1]
+
+
 func _on_bake_pressed() -> void:
 	if _baking:
 		return # re-entry guard: a bake is already running
@@ -106,6 +163,14 @@ func _on_bake_pressed() -> void:
 	var root := EditorInterface.get_edited_scene_root()
 	if root == null or not (root is Node3D):
 		push_error("pavlaka: open a 3D scene first")
+		return
+
+	var blender := _blender_path()
+	if blender.is_empty():
+		push_error("pavlaka: Blender path not set — set it in Project Settings → pavlaka/blender_path")
+		return
+	if not FileAccess.file_exists(blender):
+		push_error("pavlaka: Blender not found at '%s' — fix Project Settings → pavlaka/blender_path" % blender)
 		return
 
 	_baking = true
@@ -139,7 +204,7 @@ func _on_bake_pressed() -> void:
 		else:
 			dlg.dialog_text = msg
 
-	var err: int = await PavlakaBaker.bake(root, _current, _blender_path(), _current.get_bake_opts(), progress, cancelled)
+	var err: int = await PavlakaBaker.bake(root, _current, blender, _current.get_bake_opts(), progress, cancelled)
 
 	if is_instance_valid(dlg):
 		dlg.queue_free()
