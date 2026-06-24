@@ -15,10 +15,12 @@ const BAKE_SCRIPT := "res://addons/pavlaka/bake.py"
 const DEFAULTS := {
 	"out_dir": "res://lightmaps/",
 	"atlas": 512,
-	"light_energy_scale": 1.0,
-	"ambient": 0.2,
-	"ambient_color": Color.WHITE,
 	"samples": 256,
+	"light_energy_scale": 1.0,
+	"environment_mode": 1, # SCENE
+	"environment_custom_sky": null,
+	"environment_custom_color": Color(0.2, 0.2, 0.2),
+	"environment_custom_energy": 1.0,
 }
 
 
@@ -82,17 +84,17 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 	DirAccess.make_dir_recursive_absolute(out_dir)
 	# write bake parameters (incl. each Static light's actual energy + linear color) to a
 	# JSON the bake script reads, instead of a long positional arg list
-	var amb: Color = cfg["ambient_color"]
 	var lights: Array = []
 	_collect_lights(root, lights)
+	var env := _resolve_environment(root, cfg)
 	var params := {
 		"atlas": cfg["atlas"],
 		"samples": cfg["samples"],
-		"ambient_energy": cfg["ambient"],
-		"ambient_color": [amb.r, amb.g, amb.b],
 		"light_energy_scale": cfg["light_energy_scale"],
 		"lights": lights,
-		"sky_panorama": _bake_sky_panorama(root), # "" when no WorldEnvironment sky
+		"sky_panorama": env["sky_panorama"],
+		"ambient_color": env["ambient_color"],
+		"ambient_energy": env["ambient_energy"],
 	}
 	var params_path := "user://pavlaka_tmp/params.json"
 	var pf := FileAccess.open(params_path, FileAccess.WRITE)
@@ -243,18 +245,47 @@ static func _build_export_scene(root: Node) -> Node3D:
 	return export_root
 
 
-# If the scene has a WorldEnvironment with a Sky, bake it to an equirect radiance
-# panorama EXR and return its absolute path (for Blender's world); else "".
-static func _bake_sky_panorama(root: Node) -> String:
-	var env := _find_environment(root)
-	if env == null or env.background_mode != Environment.BG_SKY or env.sky == null:
-		return ""
+# Resolve the Environment mode into bake params: either a sky panorama path, or a flat
+# ambient color+energy. Mirrors LightmapGI's Environment Mode.
+static func _resolve_environment(root: Node, cfg: Dictionary) -> Dictionary:
+	var none := {"sky_panorama": "", "ambient_color": [0.0, 0.0, 0.0], "ambient_energy": 0.0}
+	match int(cfg["environment_mode"]):
+		1: # SCENE — bake the scene's WorldEnvironment (sky or background)
+			var e := _find_environment(root)
+			if e != null:
+				var p := _bake_env_panorama(e)
+				if p != "":
+					return {"sky_panorama": p, "ambient_color": [0.0, 0.0, 0.0], "ambient_energy": 0.0}
+			return none
+		2: # CUSTOM_SKY — bake the given Sky resource
+			var sky: Sky = cfg["environment_custom_sky"]
+			if sky != null:
+				var p := _bake_sky_resource(sky, float(cfg["environment_custom_energy"]))
+				if p != "":
+					return {"sky_panorama": p, "ambient_color": [0.0, 0.0, 0.0], "ambient_energy": 0.0}
+			return none
+		3: # CUSTOM_COLOR — flat ambient
+			var lin: Color = (cfg["environment_custom_color"] as Color).srgb_to_linear()
+			return {"sky_panorama": "", "ambient_color": [lin.r, lin.g, lin.b], "ambient_energy": float(cfg["environment_custom_energy"])}
+	return none # DISABLED
+
+
+static func _bake_env_panorama(env: Environment) -> String:
 	var img := RenderingServer.environment_bake_panorama(env.get_rid(), false, Vector2i(256, 128))
+	return _save_panorama(img)
+
+
+static func _bake_sky_resource(sky: Sky, energy: float) -> String:
+	var img := RenderingServer.sky_bake_panorama(sky.get_rid(), energy, false, Vector2i(256, 128))
+	return _save_panorama(img)
+
+
+static func _save_panorama(img: Image) -> String:
 	if img == null or img.is_empty():
 		return ""
 	var rel := "user://pavlaka_tmp/sky.exr"
 	if img.save_exr(rel) != OK:
-		push_warning("pavlaka: failed to save sky panorama; using flat ambient")
+		push_warning("pavlaka: failed to save sky panorama; using no ambient")
 		return ""
 	return ProjectSettings.globalize_path(rel)
 

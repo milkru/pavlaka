@@ -17,12 +17,9 @@ extends LightmapGI
 ## Cycles samples per bake. The OIDN denoise pass cleans up remaining noise.
 @export var samples: int = 256
 
-@export_group("Ambient Dome")
-## Ambient/sky dome brightness (white * energy). With no scene lights this alone gives
-## an ambient-occlusion bake; with a sun it acts as fill light.
-@export var ambient_energy: float = 0.2
-## Ambient/sky dome color.
-@export var ambient_color: Color = Color.WHITE
+# NOTE: the Environment section (Mode / Custom Sky / Custom Color / Custom Energy) is
+# LightmapGI's own — we don't redefine it, just keep it visible (see _validate_property)
+# and read it in the baker. Mode values: 0 Disabled, 1 Scene, 2 Custom Sky, 3 Custom Color.
 
 @export_group("Lights")
 ## Multiplier applied to each Static light's own energy during the bake. Only lights with
@@ -36,9 +33,12 @@ func get_bake_opts() -> Dictionary:
 		"out_dir": output_dir,
 		"atlas": atlas_size,
 		"samples": samples,
-		"ambient": ambient_energy,
-		"ambient_color": ambient_color,
 		"light_energy_scale": light_energy_scale,
+		# these are LightmapGI's own inherited Environment properties
+		"environment_mode": environment_mode,
+		"environment_custom_sky": environment_custom_sky,
+		"environment_custom_color": environment_custom_color,
+		"environment_custom_energy": environment_custom_energy,
 	}
 
 
@@ -65,9 +65,17 @@ func _apply_baked_bounds() -> void:
 var _inherited_props: Dictionary = {}
 
 
+# LightmapGI's Environment properties are kept visible (it's the section we DO want);
+# its own _validate_property still hides the custom sky/color by mode.
+const _KEEP_VISIBLE := {
+	"environment_mode": true, "environment_custom_sky": true,
+	"environment_custom_color": true, "environment_custom_energy": true,
+}
+
+
 func _validate_property(property: Dictionary) -> void:
 	if _inherited_props.is_empty():
 		for p in ClassDB.class_get_property_list("LightmapGI", true):
 			_inherited_props[p.name] = true
-	if _inherited_props.has(property.name):
+	if _inherited_props.has(property.name) and not _KEEP_VISIBLE.has(property.name):
 		property.usage &= ~PROPERTY_USAGE_EDITOR

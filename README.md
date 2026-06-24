@@ -56,8 +56,8 @@ combines them.
 | Blender Bake | `output_dir` | Base dir for bake output (default `res://lightmaps`). Each bake writes to a per-scene subfolder mirroring the scene's path — e.g. `res://levels/forest.tscn` → `res://lightmaps/levels/forest/` — so same-named scenes in different folders never collide. Inside: one EXR per mesh named after the node + a `<scene>.lmbake`. |
 | Blender Bake | `atlas_size` | Per-mesh lightmap slice resolution. |
 | Blender Bake | `samples` | Cycles samples (denoised afterward). |
-| Ambient Dome | `ambient_energy` | Flat ambient dome brightness (white × energy). **Used only when the scene has no `WorldEnvironment` sky** — if it does, that sky is baked to a panorama and used as the world instead (accurate sky lighting + AO). |
-| Ambient Dome | `ambient_color` | Flat ambient dome color (fallback, as above). |
+| Environment | `Mode` | LightmapGI's own Environment Mode, used for the bake's ambient/sky: **Disabled** (none), **Scene** (bake the scene's `WorldEnvironment` sky to a panorama), **Custom Sky** (bake a given `Sky`), **Custom Color** (flat color). |
+| Environment | `Custom Sky` / `Custom Color` / `Custom Energy` | Used by the Custom Sky / Custom Color modes (energy scales either). |
 | Lights | `light_energy_scale` | Multiplier on each **Static** light's own energy/color during the bake (only `Bake Mode = Static` lights contribute). Tune if baked brightness doesn't match the in-editor lighting. |
 
 The inherited `LightmapGI` settings (Quality, Bounces, etc.) are hidden — baking is
