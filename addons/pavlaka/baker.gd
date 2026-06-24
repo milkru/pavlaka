@@ -115,41 +115,44 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 			% ("; ".join(PackedStringArray(bake_errors)) if not bake_errors.is_empty() else "none reported"))
 		return FAILED
 
-	# 5. import each per-mesh EXR slice as a CompressedTexture2DArray.
-	# Blender created these files while the editor is open, so the EditorFileSystem may
-	# not know them yet (esp. after the folder was deleted/recreated). update_file alone
-	# fails for brand-new files; a full scan reliably registers + imports them.
+	# 5. import the per-mesh EXR slices as CompressedTexture2DArray.
+	# Prefer the light path (update_file + reimport_files): it (re)imports only these
+	# files and, crucially, does NOT trigger a project-wide script-class rescan — so it
+	# won't reload addon scripts mid-bake and kill this coroutine. A full scan() is only
+	# needed for brand-new files the EditorFileSystem doesn't know yet (e.g. after the
+	# output folder was deleted), so fall back to it only if the light path can't load.
 	var efs := EditorInterface.get_resource_filesystem()
+	var slice_paths := PackedStringArray()
+	var any_new := false
 	for m in baked_meshes:
 		var p: String = out_dir.path_join("baked_%d.exr" % int(m["slice_index"]))
-		_write_exr_import(p)
+		if _write_exr_import(p): # true when a fresh .import was created (file is new)
+			any_new = true
 		efs.update_file(p)
-	# Make the editor discover + (re)import the freshly written/overwritten files. In the
-	# GUI, load() only resolves already-imported source files, so we must wait for the
-	# scan to actually finish (esp. after the folder was deleted). Connect BEFORE scanning
-	# so we can't miss the completion signal; wait on it (frame budget guards a hang).
-	# The scan imports the files itself — calling reimport_files here would run while the
-	# scan is still importing and trip the "recursive reimport" guard, so we don't.
-	var scanned := [false]
-	var on_changed := func(): scanned[0] = true
-	efs.filesystem_changed.connect(on_changed)
-	efs.scan()
-	var frames := 0
-	while not scanned[0] and frames < 1800:
-		await Engine.get_main_loop().process_frame
-		frames += 1
-	if efs.filesystem_changed.is_connected(on_changed):
-		efs.filesystem_changed.disconnect(on_changed)
+		slice_paths.append(p)
 
 	var textures: Array = []
-	textures.resize(baked_meshes.size())
-	for m in baked_meshes:
-		var p: String = out_dir.path_join("baked_%d.exr" % int(m["slice_index"]))
-		var tex := ResourceLoader.load(p, "", ResourceLoader.CACHE_MODE_IGNORE)
-		if tex == null:
-			push_error("pavlaka: failed to load imported lightmap slice '%s'" % p)
+	if not any_new:
+		# warm re-bake: files are already known/imported, so refresh them cheaply
+		# (no project-wide script rescan, and no "can't find file" on unknown files)
+		efs.reimport_files(slice_paths)
+		textures = _load_slices(baked_meshes, out_dir)
+	if textures.is_empty():
+		# cold case: files unknown to the EditorFileSystem — full scan + wait, then retry
+		var scanned := [false]
+		var on_changed := func(): scanned[0] = true
+		efs.filesystem_changed.connect(on_changed)
+		efs.scan()
+		var frames := 0
+		while not scanned[0] and frames < 1800:
+			await Engine.get_main_loop().process_frame
+			frames += 1
+		if efs.filesystem_changed.is_connected(on_changed):
+			efs.filesystem_changed.disconnect(on_changed)
+		textures = _load_slices(baked_meshes, out_dir)
+		if textures.is_empty():
+			push_error("pavlaka: failed to import baked lightmap slices (see Output)")
 			return ERR_FILE_CANT_READ
-		textures[int(m["slice_index"])] = tex
 
 	# 6. build the LightmapGIData (Godot combines the slices into one layered atlas)
 	var data := LightmapGIData.new()
@@ -236,6 +239,20 @@ static func _report(progress: Callable, msg: String) -> void:
 		progress.call(msg)
 
 
+# Load all per-mesh slices (fresh from disk) into a slice-indexed array. Returns []
+# if any slice isn't importable yet, so the caller can fall back to a full scan.
+static func _load_slices(baked_meshes: Array, out_dir: String) -> Array:
+	var textures: Array = []
+	textures.resize(baked_meshes.size())
+	for m in baked_meshes:
+		var p: String = out_dir.path_join("baked_%d.exr" % int(m["slice_index"]))
+		var tex := ResourceLoader.load(p, "", ResourceLoader.CACHE_MODE_IGNORE)
+		if tex == null:
+			return []
+		textures[int(m["slice_index"])] = tex
+	return textures
+
+
 static func _has_uv2(mesh: Mesh) -> bool:
 	# surface_get_arrays() works on every Mesh subclass (ArrayMesh + PrimitiveMesh);
 	# surface_get_format() is ArrayMesh-only, so we check the arrays instead.
@@ -271,11 +288,12 @@ static func _find(targets: Array[Target], mesh_name: String) -> Target:
 	return null
 
 
-static func _write_exr_import(exr_res_path: String) -> void:
-	# Keep an existing .import as-is so its assigned UID stays stable across re-bakes
-	# (otherwise scenes/.lmbake that reference the old UID warn and fall back to path).
+# Returns true if a fresh .import was created (the file is new to the project), false if
+# one already existed (a re-bake). Keeps an existing .import as-is so its assigned UID
+# stays stable across re-bakes (else scenes/.lmbake referencing the old UID warn).
+static func _write_exr_import(exr_res_path: String) -> bool:
 	if FileAccess.file_exists(exr_res_path + ".import"):
-		return
+		return false
 	var f := FileAccess.open(exr_res_path + ".import", FileAccess.WRITE)
 	f.store_string("""[remap]
 
@@ -291,3 +309,4 @@ slices/horizontal=1
 slices/vertical=1
 """)
 	f.close()
+	return true
