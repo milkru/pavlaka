@@ -58,7 +58,7 @@ combines them.
 | Blender Bake | `samples` | Cycles samples (denoised afterward). |
 | Ambient Dome | `ambient_energy` | Sky/ambient dome brightness (white × energy). |
 | Ambient Dome | `ambient_color` | Sky/ambient dome color. |
-| Lights | `sun_energy` | Energy applied to sun lights during the bake. |
+| Lights | `light_energy_scale` | Multiplier on each **Static** light's own energy/color during the bake (only `Bake Mode = Static` lights contribute). Tune if baked brightness doesn't match the in-editor lighting. |
 
 The inherited `LightmapGI` settings (Quality, Bounces, etc.) are hidden — baking is
 controlled by the parameters above.

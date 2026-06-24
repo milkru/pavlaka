@@ -23,15 +23,16 @@ glb = rest[0]
 out_dir = rest[1] if len(rest) > 1 else os.path.dirname(glb)
 os.makedirs(out_dir, exist_ok=True)
 
-ATLAS = int(rest[2]) if len(rest) > 2 else 512
-SUN_ENERGY = float(rest[3]) if len(rest) > 3 else 4.0
-AMBIENT = float(rest[4]) if len(rest) > 4 else 0.2
-SAMPLES = int(rest[5]) if len(rest) > 5 else 256
-AMBIENT_RGB = (
-    float(rest[6]) if len(rest) > 6 else 1.0,
-    float(rest[7]) if len(rest) > 7 else 1.0,
-    float(rest[8]) if len(rest) > 8 else 1.0,
-)
+# bake parameters come from a JSON file written by the plugin
+with open(rest[2], "r") as _pf:
+    PARAMS = json.load(_pf)
+ATLAS = int(PARAMS.get("atlas", 512))
+SAMPLES = int(PARAMS.get("samples", 256))
+AMBIENT = float(PARAMS.get("ambient_energy", 0.2))
+AMBIENT_RGB = PARAMS.get("ambient_color", [1.0, 1.0, 1.0])
+LIGHT_ENERGY_SCALE = float(PARAMS.get("light_energy_scale", 1.0))
+# name -> {"energy", "color":[r,g,b] linear}; used to override imported lights
+LIGHTS = {l["name"]: l for l in PARAMS.get("lights", [])}
 
 _log = open(os.path.join(out_dir, "bake.log"), "w", encoding="utf-8")
 
@@ -138,9 +139,14 @@ def main():
     bg.inputs[0].default_value = (AMBIENT_RGB[0], AMBIENT_RGB[1], AMBIENT_RGB[2], 1.0)
     bg.inputs[1].default_value = AMBIENT
 
+    # override imported lights with the Godot light's actual energy (x scale) and color
     for obj in bpy.data.objects:
-        if obj.type == 'LIGHT' and obj.data.type == 'SUN':
-            obj.data.energy = SUN_ENERGY
+        if obj.type == 'LIGHT' and obj.name in LIGHTS:
+            info = LIGHTS[obj.name]
+            obj.data.energy = float(info["energy"]) * LIGHT_ENERGY_SCALE
+            col = info["color"]
+            obj.data.color = (col[0], col[1], col[2])
+            out("PAVLAKA_BAKE: light '%s' energy=%.3f" % (obj.name, obj.data.energy))
 
     bake = scene.render.bake
     bake.use_pass_direct = True

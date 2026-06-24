@@ -25,9 +25,10 @@ extends LightmapGI
 @export var ambient_color: Color = Color.WHITE
 
 @export_group("Lights")
-## Energy applied to DirectionalLight (sun) lights during the bake (POC stand-in until
-## proper Godot->Cycles light-energy calibration exists).
-@export var sun_energy: float = 4.0
+## Multiplier applied to each Static light's own energy during the bake. Only lights with
+## Bake Mode = Static contribute; their actual energy and color are used (×this scale).
+## Tune this if the baked brightness doesn't match the in-editor lighting.
+@export var light_energy_scale: float = 1.0
 
 
 func get_bake_opts() -> Dictionary:
@@ -37,7 +38,7 @@ func get_bake_opts() -> Dictionary:
 		"samples": samples,
 		"ambient": ambient_energy,
 		"ambient_color": ambient_color,
-		"sun_energy": sun_energy,
+		"light_energy_scale": light_energy_scale,
 	}
 
 

@@ -15,7 +15,7 @@ const BAKE_SCRIPT := "res://addons/pavlaka/bake.py"
 const DEFAULTS := {
 	"out_dir": "res://lightmaps/",
 	"atlas": 512,
-	"sun_energy": 4.0,
+	"light_energy_scale": 1.0,
 	"ambient": 0.2,
 	"ambient_color": Color.WHITE,
 	"samples": 256,
@@ -80,12 +80,26 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 	# scenes with the same name in different folders never collide.
 	var out_dir := _scene_bake_dir(root, cfg["out_dir"])
 	DirAccess.make_dir_recursive_absolute(out_dir)
+	# write bake parameters (incl. each Static light's actual energy + linear color) to a
+	# JSON the bake script reads, instead of a long positional arg list
 	var amb: Color = cfg["ambient_color"]
+	var lights: Array = []
+	_collect_lights(root, lights)
+	var params := {
+		"atlas": cfg["atlas"],
+		"samples": cfg["samples"],
+		"ambient_energy": cfg["ambient"],
+		"ambient_color": [amb.r, amb.g, amb.b],
+		"light_energy_scale": cfg["light_energy_scale"],
+		"lights": lights,
+	}
+	var params_path := "user://pavlaka_tmp/params.json"
+	var pf := FileAccess.open(params_path, FileAccess.WRITE)
+	pf.store_string(JSON.stringify(params))
+	pf.close()
 	var args := PackedStringArray([
 		"--background", "--python", ProjectSettings.globalize_path(BAKE_SCRIPT), "--",
-		glb_abs, ProjectSettings.globalize_path(out_dir),
-		str(cfg["atlas"]), str(cfg["sun_energy"]), str(cfg["ambient"]), str(cfg["samples"]),
-		str(amb.r), str(amb.g), str(amb.b),
+		glb_abs, ProjectSettings.globalize_path(out_dir), ProjectSettings.globalize_path(params_path),
 	])
 	# Run Blender non-blocking and poll, so the editor stays responsive (and we can show
 	# progress) instead of freezing. Output is captured via bake.log (create_process
@@ -226,6 +240,17 @@ static func _build_export_scene(root: Node) -> Node3D:
 	export_root.name = root.name
 	_gather_into(root, export_root)
 	return export_root
+
+
+# collect Static, visible lights' actual energy + linear color (matched by node name in
+# bake.py) so the bake uses real per-light values instead of a fixed energy
+static func _collect_lights(node: Node, out: Array) -> void:
+	for c in node.get_children():
+		if c is Light3D and (c as Light3D).is_visible_in_tree() and (c as Light3D).light_bake_mode == Light3D.BAKE_STATIC:
+			var l := c as Light3D
+			var lin := l.light_color.srgb_to_linear()
+			out.append({"name": l.name, "energy": l.light_energy, "color": [lin.r, lin.g, lin.b]})
+		_collect_lights(c, out)
 
 
 static func _gather_into(node: Node, export_root: Node3D) -> void:
