@@ -30,6 +30,8 @@ SUN_ENERGY = float(rest[3]) if len(rest) > 3 else 4.0
 AMBIENT = float(rest[4]) if len(rest) > 4 else 0.2
 SAMPLES = int(rest[5]) if len(rest) > 5 else 256
 
+print("PAVLAKA_BAKE: Blender %s, glb=%s" % (".".join(map(str, bpy.app.version)), glb))
+
 # ---- import the Godot scene ------------------------------------------------
 bpy.ops.wm.read_factory_settings(use_empty=True)
 bpy.ops.import_scene.gltf(filepath=glb)
@@ -92,10 +94,9 @@ targets = [o for o in bpy.data.objects
 targets.sort(key=lambda o: o.name)  # stable slice order
 print("PAVLAKA_BAKE: lightmap targets =", [o.name for o in targets])
 
-meshes_meta = []
-for slice_index, obj in enumerate(targets):
+def bake_one(obj, slice_index):
     me = obj.data
-    me.uv_layers.active_index = 1  # bake into UV2
+    me.uv_layers.active_index = 1 if len(me.uv_layers) >= 2 else 0
 
     img = bpy.data.images.new("LM_%s" % obj.name, width=ATLAS, height=ATLAS,
                               float_buffer=True, is_data=True)
@@ -115,7 +116,8 @@ for slice_index, obj in enumerate(targets):
     bpy.context.view_layer.objects.active = obj
 
     scene.cycles.samples = SAMPLES
-    print("PAVLAKA_BAKE: baking %s -> slice %d" % (obj.name, slice_index))
+    print("PAVLAKA_BAKE: baking %s -> slice %d (uv_layers=%d, faces=%d)"
+          % (obj.name, slice_index, len(me.uv_layers), len(me.polygons)))
     bpy.ops.object.bake(type='DIFFUSE', pass_filter={'DIRECT', 'INDIRECT'},
                         margin=16, use_clear=True)
 
@@ -125,18 +127,32 @@ for slice_index, obj in enumerate(targets):
     img.save()
     if denoise_over(img, slice_path):
         print("PAVLAKA_BAKE: denoised slice %d" % slice_index)
-
-    meshes_meta.append({
+    return {
         "name": obj.name,
         "slice_index": slice_index,
         "uv_scale": [0.0, 0.0, 1.0, 1.0],  # full-0..1 UV2 -> identity remap
-    })
+    }
 
+
+import traceback
+meshes_meta = []
+errors = []
+for slice_index, obj in enumerate(targets):
+    try:
+        meshes_meta.append(bake_one(obj, slice_index))
+    except Exception as e:
+        msg = "%s: %s" % (obj.name, e)
+        errors.append(msg)
+        print("PAVLAKA_BAKE: ERROR baking %s:\n%s" % (obj.name, traceback.format_exc()))
+
+# always write metadata so the Godot side gets a clear result (even if empty/partial)
 meta = {
-    "atlas": {"width": ATLAS, "height": ATLAS, "slices": len(targets)},
+    "atlas": {"width": ATLAS, "height": ATLAS, "slices": len(meshes_meta)},
     "baked_exposure": 1.0,
     "meshes": meshes_meta,
+    "errors": errors,
 }
 with open(os.path.join(out_dir, "baked.json"), "w") as f:
     json.dump(meta, f, indent=2)
-print("PAVLAKA_BAKE: done (%d slices)" % len(targets))
+print("PAVLAKA_BAKE: done (%d/%d slices, %d error(s))"
+      % (len(meshes_meta), len(targets), len(errors)))

@@ -71,15 +71,17 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 	var output: Array = []
 	print("pavlaka: running Blender...")
 	var code := OS.execute(blender_path, args, output, true)
+	# always surface Blender's output so bake errors are visible
+	print("pavlaka: --- Blender output (exit %d) ---\n%s\npavlaka: --- end ---" % [code, "\n".join(output)])
 	if code != 0:
-		push_error("pavlaka: Blender failed (exit %d):\n%s" % [code, "\n".join(output)])
+		push_error("pavlaka: Blender failed (exit %d) — see output above" % code)
 		return FAILED
 
 	# 4. read bake metadata
 	var meta_path := out_dir.path_join("baked.json")
 	var meta_str := FileAccess.get_file_as_string(meta_path)
 	if meta_str.is_empty():
-		push_error("pavlaka: missing bake metadata at %s" % meta_path)
+		push_error("pavlaka: missing bake metadata at %s — Blender exited 0 but wrote no result (see output above)" % meta_path)
 		return ERR_FILE_CANT_READ
 	var meta: Dictionary = JSON.parse_string(meta_str)
 	var baked_meshes: Array = meta.get("meshes", [])
