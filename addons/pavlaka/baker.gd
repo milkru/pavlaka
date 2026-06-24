@@ -8,7 +8,9 @@ extends RefCounted
 ## Every stage here is the proven POC pipeline; this just orchestrates it. Designed to be
 ## callable headlessly (no UI) so it can be verified end-to-end.
 
-const BAKE_SCRIPT := "res://blender/bake.py"
+# bake.py ships inside the addon (addons live at the fixed res://addons/<name>/ path),
+# so the plugin is self-contained: copying addons/pavlaka/ into any project is enough.
+const BAKE_SCRIPT := "res://addons/pavlaka/bake.py"
 
 const DEFAULTS := {
 	"out_dir": "res://lightmaps/",
