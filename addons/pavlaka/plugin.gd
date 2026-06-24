@@ -43,15 +43,9 @@ func _enter_tree() -> void:
 	_btn = Button.new()
 	_btn.text = "Bake with Blender"
 	_btn.pressed.connect(_on_bake_pressed)
-	var custom_icon := load("res://addons/pavlaka/blender_logo.svg")
-	if custom_icon != null:
-		_btn.icon = custom_icon
-		# the logo isn't 16x16, so cap its display width to toolbar size (editor-scaled)
-		_btn.add_theme_constant_override("icon_max_width", int(round(16.0 * EditorInterface.get_editor_scale())))
-	else:
-		var theme := EditorInterface.get_editor_theme()
-		if theme != null and theme.has_icon("Bake", "EditorIcons"):
-			_btn.icon = theme.get_icon("Bake", "EditorIcons") # fallback: built-in bake icon
+	var theme := EditorInterface.get_editor_theme()
+	if theme != null and theme.has_icon("Bake", "EditorIcons"):
+		_btn.icon = theme.get_icon("Bake", "EditorIcons") # match the built-in bake button
 	_btn.hide() # shown only while a LightmapBlenderGI is selected
 	add_control_to_container(CONTAINER_SPATIAL_EDITOR_MENU, _btn)
 
