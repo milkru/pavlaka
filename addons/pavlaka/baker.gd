@@ -55,6 +55,9 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 	var glb_abs := ProjectSettings.globalize_path("user://pavlaka_tmp/scene.glb")
 	var export_root := root.duplicate()
 	_prune_hidden(export_root)
+	# GLTFDocument.append_from_scene only exports nodes owned by the scene root; a
+	# duplicated tree can lose those owner links, so re-own every node explicitly.
+	_reown(export_root, export_root)
 	var doc := GLTFDocument.new()
 	var state := GLTFState.new()
 	var err := doc.append_from_scene(export_root, state)
@@ -93,7 +96,10 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 	var meta: Dictionary = JSON.parse_string(meta_str)
 	var baked_meshes: Array = meta.get("meshes", [])
 
-	# 5. import each per-mesh EXR slice as a CompressedTexture2DArray
+	# 5. import each per-mesh EXR slice as a CompressedTexture2DArray.
+	# Blender created these files while the editor is open, so the EditorFileSystem may
+	# not know them yet (esp. after the folder was deleted/recreated). update_file alone
+	# fails for brand-new files; a full scan reliably registers + imports them.
 	var efs := EditorInterface.get_resource_filesystem()
 	var slice_paths := PackedStringArray()
 	for m in baked_meshes:
@@ -101,13 +107,31 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 		_write_exr_import(p)
 		slice_paths.append(p)
 		efs.update_file(p)
+	# Make the editor discover + import the freshly written files. In the GUI, load()
+	# only resolves already-imported source files, so we must wait for the scan to
+	# actually finish (esp. after the folder was deleted). Connect BEFORE scanning so we
+	# can't miss the completion signal; wait on it (frame budget guards against a hang).
+	var scanned := [false]
+	var on_changed := func(): scanned[0] = true
+	efs.filesystem_changed.connect(on_changed)
+	efs.scan()
+	var frames := 0
+	while not scanned[0] and frames < 1800:
+		await Engine.get_main_loop().process_frame
+		frames += 1
+	if efs.filesystem_changed.is_connected(on_changed):
+		efs.filesystem_changed.disconnect(on_changed)
 	efs.reimport_files(slice_paths)
 
 	var textures: Array = []
 	textures.resize(baked_meshes.size())
 	for m in baked_meshes:
 		var p: String = out_dir.path_join("baked_%d.exr" % int(m["slice_index"]))
-		textures[int(m["slice_index"])] = ResourceLoader.load(p, "", ResourceLoader.CACHE_MODE_IGNORE)
+		var tex := ResourceLoader.load(p, "", ResourceLoader.CACHE_MODE_IGNORE)
+		if tex == null:
+			push_error("pavlaka: failed to load imported lightmap slice '%s'" % p)
+			return ERR_FILE_CANT_READ
+		textures[int(m["slice_index"])] = tex
 
 	# 6. build the LightmapGIData (Godot combines the slices into one layered atlas)
 	var data := LightmapGIData.new()
@@ -170,6 +194,13 @@ static func _prune_hidden(node: Node) -> void:
 			c.free()
 		else:
 			_prune_hidden(c)
+
+
+# set every descendant's owner to the scene root so GLTFDocument exports them
+static func _reown(node: Node, owner_root: Node) -> void:
+	for c in node.get_children():
+		c.owner = owner_root
+		_reown(c, owner_root)
 
 
 static func _has_uv2(mesh: Mesh) -> bool:

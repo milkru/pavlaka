@@ -76,13 +76,21 @@ func _on_bake_pressed() -> void:
 	if root == null or not (root is Node3D):
 		push_error("pavlaka: open a 3D scene first")
 		return
-	var err := PavlakaBaker.bake(root, _current, _blender_path(), _current.get_bake_opts())
+	var err: int = await PavlakaBaker.bake(root, _current, _blender_path(), _current.get_bake_opts())
 	if err == OK:
 		EditorInterface.mark_scene_as_unsaved()
 
 
 # ---- headless self-test ----------------------------------------------------
 func _autobake() -> void:
+	# wait for the editor's initial filesystem scan to finish, so this represents a
+	# real button click in a settled editor (not a startup-time race)
+	var efs := EditorInterface.get_resource_filesystem()
+	while efs.is_scanning():
+		await Engine.get_main_loop().process_frame
+	for _i in 30:
+		await Engine.get_main_loop().process_frame
+
 	print("PAVLAKA_AUTO: building test scene")
 	var root := Node3D.new()
 	root.name = "BakeScene"
@@ -106,7 +114,7 @@ func _autobake() -> void:
 	var lm := LightmapBlenderGI.new(); lm.name = "LightmapBlenderGI"
 	root.add_child(lm); lm.owner = root
 
-	var err := PavlakaBaker.bake(root, lm, _blender_path(), lm.get_bake_opts())
+	var err: int = await PavlakaBaker.bake(root, lm, _blender_path(), lm.get_bake_opts())
 	print("PAVLAKA_AUTO: bake err=", err,
 		" users=", lm.light_data.get_user_count() if lm.light_data else -1,
 		" textures=", lm.light_data.get_lightmap_textures().size() if lm.light_data else -1)
