@@ -104,7 +104,24 @@ func _on_bake_pressed() -> void:
 	if root == null or not (root is Node3D):
 		push_error("pavlaka: open a 3D scene first")
 		return
-	var err: int = await PavlakaBaker.bake(root, _current, _blender_path(), _current.get_bake_opts())
+	# progress dialog so the editor shows feedback instead of appearing frozen
+	var dlg := AcceptDialog.new()
+	dlg.title = "pavlaka"
+	dlg.get_ok_button().hide()
+	dlg.exclusive = true # block interaction (incl. another bake) until done
+	dlg.unresizable = true
+	dlg.min_size = Vector2i(360, 90)
+	dlg.dialog_text = "Starting…"
+	EditorInterface.get_base_control().add_child(dlg)
+	dlg.popup_centered()
+	var progress := func(msg: String):
+		if is_instance_valid(dlg):
+			dlg.dialog_text = msg
+
+	var err: int = await PavlakaBaker.bake(root, _current, _blender_path(), _current.get_bake_opts(), progress)
+
+	if is_instance_valid(dlg):
+		dlg.queue_free()
 	if err == OK:
 		EditorInterface.mark_scene_as_unsaved()
 

@@ -29,7 +29,8 @@ class Target:
 
 
 ## Bake `lm`'s scene. Returns OK or an error code; messages go to the editor log.
-static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dictionary = {}) -> int:
+## `progress` (optional) is called with a status String at each stage for UI feedback.
+static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dictionary = {}, progress := Callable()) -> int:
 	var cfg := DEFAULTS.duplicate()
 	for k in opts:
 		cfg[k] = opts[k]
@@ -51,6 +52,7 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 	# Export a duplicate with hidden nodes pruned: hidden meshes shouldn't bake anyway,
 	# and a hidden node makes Godot emit a *required* KHR_node_visibility glTF extension
 	# that older Blender importers reject outright.
+	_report(progress, "Exporting scene…")
 	DirAccess.make_dir_recursive_absolute("user://pavlaka_tmp")
 	var glb_abs := ProjectSettings.globalize_path("user://pavlaka_tmp/scene.glb")
 	var export_root := root.duplicate()
@@ -78,16 +80,25 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 		str(cfg["atlas"]), str(cfg["sun_energy"]), str(cfg["ambient"]), str(cfg["samples"]),
 		str(amb.r), str(amb.g), str(amb.b),
 	])
-	var output: Array = []
+	# Run Blender non-blocking and poll, so the editor stays responsive (and we can show
+	# progress) instead of freezing. Output is captured via bake.log (create_process
+	# can't read stdout). Wait one frame between polls to yield to the editor.
 	print("pavlaka: running Blender...")
-	var code := OS.execute(blender_path, args, output, true)
-	# always surface Blender's output so bake errors are visible
-	print("pavlaka: --- Blender output (exit %d) ---\n%s\npavlaka: --- end ---" % [code, "\n".join(output)])
-	if code != 0:
-		push_error("pavlaka: Blender failed (exit %d) — see output above" % code)
-		return FAILED
+	var pid := OS.create_process(blender_path, args)
+	if pid <= 0:
+		push_error("pavlaka: failed to launch Blender at '%s'" % blender_path)
+		return ERR_CANT_CREATE
+	var start_ms := Time.get_ticks_msec()
+	while OS.is_process_running(pid):
+		_report(progress, "Baking in Blender…  %ds" % ((Time.get_ticks_msec() - start_ms) / 1000))
+		await Engine.get_main_loop().process_frame
+	# surface Blender's log for diagnostics (it mirrors everything bake.py printed)
+	var log_txt := FileAccess.get_file_as_string(out_dir.path_join("bake.log"))
+	if not log_txt.is_empty():
+		print("pavlaka: --- Blender log ---\n%s\npavlaka: --- end ---" % log_txt)
 
 	# 4. read bake metadata
+	_report(progress, "Importing lightmaps…")
 	var meta_path := out_dir.path_join("baked.json")
 	var meta_str := FileAccess.get_file_as_string(meta_path)
 	if meta_str.is_empty():
@@ -95,6 +106,11 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 		return ERR_FILE_CANT_READ
 	var meta: Dictionary = JSON.parse_string(meta_str)
 	var baked_meshes: Array = meta.get("meshes", [])
+	var bake_errors: Array = meta.get("errors", [])
+	if baked_meshes.is_empty():
+		push_error("pavlaka: Blender bake produced no lightmaps (see bake.log). Errors: %s"
+			% ("; ".join(PackedStringArray(bake_errors)) if not bake_errors.is_empty() else "none reported"))
+		return FAILED
 
 	# 5. import each per-mesh EXR slice as a CompressedTexture2DArray.
 	# Blender created these files while the editor is open, so the EditorFileSystem may
@@ -201,6 +217,11 @@ static func _reown(node: Node, owner_root: Node) -> void:
 	for c in node.get_children():
 		c.owner = owner_root
 		_reown(c, owner_root)
+
+
+static func _report(progress: Callable, msg: String) -> void:
+	if progress.is_valid():
+		progress.call(msg)
 
 
 static func _has_uv2(mesh: Mesh) -> bool:

@@ -1,22 +1,20 @@
-"""M2c — bake a Godot-exported scene's lightmaps (multi-mesh, one slice per mesh).
+"""Bake a Godot-exported scene's lightmaps (multi-mesh, one slice per mesh).
 
 Imports a glb from Godot, finds every lightmap target (mesh with >=2 UV layers = it
 carries a Godot UV2), and bakes IRRADIANCE (Diffuse, Direct+Indirect, Color OFF) into
 each target's UV2. Each mesh -> its own denoised linear EXR slice (baked_<i>.exr).
 Godot combines the per-mesh slices into one layered atlas via set_lightmap_textures([...]).
 
-  blender --background --python blender/bake.py -- <glb> <out_dir>
+  blender --background --python bake.py -- <glb> <out_dir> [atlas sun_energy ambient samples amb_r amb_g amb_b]
 
-Tunable knobs (defaults chosen for the POC; real values come later / from the plugin):
-  SUN_ENERGY  exposure stand-in until light-energy calibration exists
-  AMBIENT     flat world ambient until Godot WorldEnvironment is wired in
-  ATLAS       per-slice resolution
-  SAMPLES     Cycles samples (denoise cleans the rest)
+The plugin runs this non-blocking and can't read stdout, so everything is mirrored to
+<out_dir>/bake.log and the whole run is wrapped so a fatal error still writes baked.json.
 """
 import bpy
 import sys
 import os
 import json
+import traceback
 
 argv = sys.argv
 rest = argv[argv.index("--") + 1:] if "--" in argv else []
@@ -24,7 +22,6 @@ glb = rest[0]
 out_dir = rest[1] if len(rest) > 1 else os.path.dirname(glb)
 os.makedirs(out_dir, exist_ok=True)
 
-# optional positional args from the plugin: atlas, sun_energy, ambient, samples, amb_rgb
 ATLAS = int(rest[2]) if len(rest) > 2 else 512
 SUN_ENERGY = float(rest[3]) if len(rest) > 3 else 4.0
 AMBIENT = float(rest[4]) if len(rest) > 4 else 0.2
@@ -35,37 +32,27 @@ AMBIENT_RGB = (
     float(rest[8]) if len(rest) > 8 else 1.0,
 )
 
-print("PAVLAKA_BAKE: Blender %s, glb=%s" % (".".join(map(str, bpy.app.version)), glb))
+_log = open(os.path.join(out_dir, "bake.log"), "w", encoding="utf-8")
 
-# ---- import the Godot scene ------------------------------------------------
-bpy.ops.wm.read_factory_settings(use_empty=True)
-bpy.ops.import_scene.gltf(filepath=glb)
-scene = bpy.context.scene
-scene.render.engine = 'CYCLES'
-scene.cycles.device = 'CPU'
-scene.cycles.samples = SAMPLES
-scene.world = bpy.data.worlds.new("World")
-scene.world.use_nodes = True
-_bg = scene.world.node_tree.nodes["Background"]
-# A new world's Background color defaults to near-black (~0.05), so setting only the
-# strength leaves the ambient dome almost black. Set a WHITE color so AMBIENT actually
-# controls dome brightness (white * AMBIENT). With no scene lights this gives a usable
-# ambient/AO bake; with a sun it's just fill light.
-_bg.inputs[0].default_value = (AMBIENT_RGB[0], AMBIENT_RGB[1], AMBIENT_RGB[2], 1.0)
-_bg.inputs[1].default_value = AMBIENT
 
-for obj in bpy.data.objects:
-    if obj.type == 'LIGHT' and obj.data.type == 'SUN':
-        obj.data.energy = SUN_ENERGY
+def out(msg):
+    print(msg)
+    try:
+        _log.write(str(msg) + "\n")
+        _log.flush()
+    except Exception:
+        pass
 
-# ---- bake settings (shared) ------------------------------------------------
-bake = scene.render.bake
-bake.use_pass_direct = True
-bake.use_pass_indirect = True
-bake.use_pass_color = False        # irradiance, not radiance
-bake.margin = 16
-bake.margin_type = 'EXTEND'
-bake.use_clear = True
+
+def write_meta(meshes_meta, errors):
+    meta = {
+        "atlas": {"width": ATLAS, "height": ATLAS, "slices": len(meshes_meta)},
+        "baked_exposure": 1.0,
+        "meshes": meshes_meta,
+        "errors": errors,
+    }
+    with open(os.path.join(out_dir, "baked.json"), "w") as f:
+        json.dump(meta, f, indent=2)
 
 
 def denoise_over(image, out_path):
@@ -99,13 +86,7 @@ def denoise_over(image, out_path):
     return False
 
 
-# ---- find lightmap targets (meshes with >=2 UV layers) ---------------------
-targets = [o for o in bpy.data.objects
-           if o.type == 'MESH' and len(o.data.uv_layers) >= 2]
-targets.sort(key=lambda o: o.name)  # stable slice order
-print("PAVLAKA_BAKE: lightmap targets =", [o.name for o in targets])
-
-def bake_one(obj, slice_index):
+def bake_one(scene, obj, slice_index):
     me = obj.data
     me.uv_layers.active_index = 1 if len(me.uv_layers) >= 2 else 0
 
@@ -127,8 +108,8 @@ def bake_one(obj, slice_index):
     bpy.context.view_layer.objects.active = obj
 
     scene.cycles.samples = SAMPLES
-    print("PAVLAKA_BAKE: baking %s -> slice %d (uv_layers=%d, faces=%d)"
-          % (obj.name, slice_index, len(me.uv_layers), len(me.polygons)))
+    out("PAVLAKA_BAKE: baking %s -> slice %d (uv_layers=%d, faces=%d)"
+        % (obj.name, slice_index, len(me.uv_layers), len(me.polygons)))
     bpy.ops.object.bake(type='DIFFUSE', pass_filter={'DIRECT', 'INDIRECT'},
                         margin=16, use_clear=True)
 
@@ -137,7 +118,7 @@ def bake_one(obj, slice_index):
     img.file_format = 'OPEN_EXR'
     img.save()
     if denoise_over(img, slice_path):
-        print("PAVLAKA_BAKE: denoised slice %d" % slice_index)
+        out("PAVLAKA_BAKE: denoised slice %d" % slice_index)
     return {
         "name": obj.name,
         "slice_index": slice_index,
@@ -145,25 +126,61 @@ def bake_one(obj, slice_index):
     }
 
 
-import traceback
-meshes_meta = []
-errors = []
-for slice_index, obj in enumerate(targets):
-    try:
-        meshes_meta.append(bake_one(obj, slice_index))
-    except Exception as e:
-        msg = "%s: %s" % (obj.name, e)
-        errors.append(msg)
-        print("PAVLAKA_BAKE: ERROR baking %s:\n%s" % (obj.name, traceback.format_exc()))
+def main():
+    out("PAVLAKA_BAKE: Blender %s, glb=%s" % (".".join(map(str, bpy.app.version)), glb))
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+    bpy.ops.import_scene.gltf(filepath=glb)
 
-# always write metadata so the Godot side gets a clear result (even if empty/partial)
-meta = {
-    "atlas": {"width": ATLAS, "height": ATLAS, "slices": len(meshes_meta)},
-    "baked_exposure": 1.0,
-    "meshes": meshes_meta,
-    "errors": errors,
-}
-with open(os.path.join(out_dir, "baked.json"), "w") as f:
-    json.dump(meta, f, indent=2)
-print("PAVLAKA_BAKE: done (%d/%d slices, %d error(s))"
-      % (len(meshes_meta), len(targets), len(errors)))
+    scene = bpy.context.scene
+    scene.render.engine = 'CYCLES'
+    scene.cycles.device = 'CPU'
+    scene.cycles.samples = SAMPLES
+    scene.world = bpy.data.worlds.new("World")
+    scene.world.use_nodes = True
+    bg = scene.world.node_tree.nodes["Background"]
+    # A new world's Background color defaults to near-black, so set a real color so
+    # AMBIENT controls actual dome brightness (color * AMBIENT).
+    bg.inputs[0].default_value = (AMBIENT_RGB[0], AMBIENT_RGB[1], AMBIENT_RGB[2], 1.0)
+    bg.inputs[1].default_value = AMBIENT
+
+    for obj in bpy.data.objects:
+        if obj.type == 'LIGHT' and obj.data.type == 'SUN':
+            obj.data.energy = SUN_ENERGY
+
+    bake = scene.render.bake
+    bake.use_pass_direct = True
+    bake.use_pass_indirect = True
+    bake.use_pass_color = False        # irradiance, not radiance
+    bake.margin = 16
+    bake.margin_type = 'EXTEND'
+    bake.use_clear = True
+
+    targets = [o for o in bpy.data.objects
+               if o.type == 'MESH' and len(o.data.uv_layers) >= 2]
+    targets.sort(key=lambda o: o.name)  # stable slice order
+    out("PAVLAKA_BAKE: lightmap targets = %s" % [o.name for o in targets])
+
+    meshes_meta = []
+    errors = []
+    for slice_index, obj in enumerate(targets):
+        try:
+            meshes_meta.append(bake_one(scene, obj, slice_index))
+        except Exception as e:
+            errors.append("%s: %s" % (obj.name, e))
+            out("PAVLAKA_BAKE: ERROR baking %s:\n%s" % (obj.name, traceback.format_exc()))
+
+    write_meta(meshes_meta, errors)
+    out("PAVLAKA_BAKE: done (%d/%d slices, %d error(s))"
+        % (len(meshes_meta), len(targets), len(errors)))
+
+
+try:
+    main()
+except Exception as e:
+    out("PAVLAKA_BAKE: FATAL: %s\n%s" % (e, traceback.format_exc()))
+    try:
+        write_meta([], ["fatal: %s" % e])
+    except Exception:
+        pass
+finally:
+    _log.close()
