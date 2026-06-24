@@ -17,6 +17,7 @@ const DEFAULTS := {
 	"atlas": 512,
 	"sun_energy": 4.0,
 	"ambient": 0.2,
+	"ambient_color": Color.WHITE,
 	"samples": 256,
 }
 
@@ -67,10 +68,12 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 	# 3. run Blender headless to bake
 	var out_dir: String = cfg["out_dir"]
 	DirAccess.make_dir_recursive_absolute(out_dir)
+	var amb: Color = cfg["ambient_color"]
 	var args := PackedStringArray([
 		"--background", "--python", ProjectSettings.globalize_path(BAKE_SCRIPT), "--",
 		glb_abs, ProjectSettings.globalize_path(out_dir),
 		str(cfg["atlas"]), str(cfg["sun_energy"]), str(cfg["ambient"]), str(cfg["samples"]),
+		str(amb.r), str(amb.g), str(amb.b),
 	])
 	var output: Array = []
 	print("pavlaka: running Blender...")

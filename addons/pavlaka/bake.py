@@ -24,11 +24,16 @@ glb = rest[0]
 out_dir = rest[1] if len(rest) > 1 else os.path.dirname(glb)
 os.makedirs(out_dir, exist_ok=True)
 
-# optional positional args from the plugin: atlas, sun_energy, ambient, samples
+# optional positional args from the plugin: atlas, sun_energy, ambient, samples, amb_rgb
 ATLAS = int(rest[2]) if len(rest) > 2 else 512
 SUN_ENERGY = float(rest[3]) if len(rest) > 3 else 4.0
 AMBIENT = float(rest[4]) if len(rest) > 4 else 0.2
 SAMPLES = int(rest[5]) if len(rest) > 5 else 256
+AMBIENT_RGB = (
+    float(rest[6]) if len(rest) > 6 else 1.0,
+    float(rest[7]) if len(rest) > 7 else 1.0,
+    float(rest[8]) if len(rest) > 8 else 1.0,
+)
 
 print("PAVLAKA_BAKE: Blender %s, glb=%s" % (".".join(map(str, bpy.app.version)), glb))
 
@@ -46,7 +51,7 @@ _bg = scene.world.node_tree.nodes["Background"]
 # strength leaves the ambient dome almost black. Set a WHITE color so AMBIENT actually
 # controls dome brightness (white * AMBIENT). With no scene lights this gives a usable
 # ambient/AO bake; with a sun it's just fill light.
-_bg.inputs[0].default_value = (1.0, 1.0, 1.0, 1.0)
+_bg.inputs[0].default_value = (AMBIENT_RGB[0], AMBIENT_RGB[1], AMBIENT_RGB[2], 1.0)
 _bg.inputs[1].default_value = AMBIENT
 
 for obj in bpy.data.objects:

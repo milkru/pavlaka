@@ -1,21 +1,20 @@
 @tool
 extends EditorPlugin
-## pavlaka EditorPlugin: adds a "Bake with Blender" button to the 3D editor toolbar.
-## The button gathers the edited scene's static lightmapped meshes, runs the Blender
-## bake, and assigns the resulting LightmapGIData to a LightmapGI node.
+## pavlaka EditorPlugin. Mirrors the built-in LightmapGI workflow: when a
+## LightmapBlenderGI node is selected, a "Bake with Blender" button appears in the 3D
+## editor toolbar and bakes that node's scene using the node's parameters.
 ##
-## Blender path resolves from (in order): project setting "pavlaka/blender_path",
-## env PAVLAKA_BLENDER. Headless self-test: set env PAVLAKA_AUTOBAKE=1 (and PAVLAKA_BLENDER)
+## Blender path resolves from project setting "pavlaka/blender_path", else env
+## PAVLAKA_BLENDER. Headless self-test: set env PAVLAKA_AUTOBAKE=1 (+ PAVLAKA_BLENDER)
 ## and launch with --editor --headless to run _autobake() and quit.
-
-var _btn: Button
-
 
 const SETTING_BLENDER := "pavlaka/blender_path"
 
+var _btn: Button
+var _current: LightmapBlenderGI
+
 
 func _enter_tree() -> void:
-	# expose the Blender path as a Project Settings field (file picker)
 	if not ProjectSettings.has_setting(SETTING_BLENDER):
 		ProjectSettings.set_setting(SETTING_BLENDER, "")
 	ProjectSettings.set_initial_value(SETTING_BLENDER, "")
@@ -30,7 +29,9 @@ func _enter_tree() -> void:
 	_btn = Button.new()
 	_btn.text = "Bake with Blender"
 	_btn.pressed.connect(_on_bake_pressed)
+	_btn.visible = false # shown only while a LightmapBlenderGI is selected
 	add_control_to_container(CONTAINER_SPATIAL_EDITOR_MENU, _btn)
+
 	if OS.get_environment("PAVLAKA_AUTOBAKE") != "":
 		call_deferred("_autobake")
 
@@ -42,6 +43,20 @@ func _exit_tree() -> void:
 		_btn = null
 
 
+# --- selection-driven button (like the built-in LightmapGI bake button) -----
+func _handles(object: Object) -> bool:
+	return object is LightmapBlenderGI
+
+
+func _edit(object: Object) -> void:
+	_current = object as LightmapBlenderGI
+
+
+func _make_visible(visible: bool) -> void:
+	if _btn:
+		_btn.visible = visible
+
+
 func _blender_path() -> String:
 	var p: String = ProjectSettings.get_setting(SETTING_BLENDER, "")
 	if not p.is_empty():
@@ -50,25 +65,16 @@ func _blender_path() -> String:
 
 
 func _on_bake_pressed() -> void:
+	if _current == null:
+		push_error("pavlaka: select a LightmapBlenderGI node first")
+		return
 	var root := EditorInterface.get_edited_scene_root()
 	if root == null or not (root is Node3D):
 		push_error("pavlaka: open a 3D scene first")
 		return
-	var lm := _find_or_make_lightmap(root)
-	var err := PavlakaBaker.bake(root, lm, _blender_path())
+	var err := PavlakaBaker.bake(root, _current, _blender_path(), _current.get_bake_opts())
 	if err == OK:
 		EditorInterface.mark_scene_as_unsaved()
-
-
-func _find_or_make_lightmap(root: Node) -> LightmapGI:
-	for c in root.get_children():
-		if c is LightmapGI:
-			return c
-	var lm := LightmapGI.new()
-	lm.name = "LightmapGI"
-	root.add_child(lm)
-	lm.owner = root
-	return lm
 
 
 # ---- headless self-test ----------------------------------------------------
@@ -93,10 +99,10 @@ func _autobake() -> void:
 	sun.rotation = Vector3(deg_to_rad(-55), deg_to_rad(35), 0)
 	root.add_child(sun); sun.owner = root
 
-	var lm := LightmapGI.new(); lm.name = "LightmapGI"
+	var lm := LightmapBlenderGI.new(); lm.name = "LightmapBlenderGI"
 	root.add_child(lm); lm.owner = root
 
-	var err := PavlakaBaker.bake(root, lm, _blender_path())
+	var err := PavlakaBaker.bake(root, lm, _blender_path(), lm.get_bake_opts())
 	print("PAVLAKA_AUTO: bake err=", err,
 		" users=", lm.light_data.get_user_count() if lm.light_data else -1,
 		" textures=", lm.light_data.get_lightmap_textures().size() if lm.light_data else -1)
