@@ -11,6 +11,7 @@ extends EditorPlugin
 const SETTING_BLENDER := "pavlaka/blender_path"
 
 var _btn: Button
+var _builtin_btn: Button
 var _current: LightmapBlenderGI
 
 
@@ -59,22 +60,33 @@ func _on_selection_changed() -> void:
 			break
 	if _btn:
 		_btn.visible = _current != null
-	if _current != null:
-		# LightmapBlenderGI is-a LightmapGI, so Godot's built-in editor plugin also shows
-		# its "Bake Lightmaps" button. Hide it (deferred, after the built-in shows it) so
-		# only our button remains. Re-shown automatically for plain LightmapGI nodes.
-		call_deferred("_hide_builtin_bake_button")
+	# LightmapBlenderGI is-a LightmapGI, so Godot's built-in editor plugin also shows its
+	# "Bake Lightmaps" button. Hide it while our node is selected (and re-hide if the
+	# built-in plugin pops it back up — see _on_builtin_vis). Plain LightmapGI nodes are
+	# unaffected (then _current is null and we leave the built-in button alone).
+	var b := _find_builtin_bake_button()
+	if b and _current != null:
+		b.visible = false
 
 
-func _hide_builtin_bake_button() -> void:
-	if _btn == null:
-		return
-	var bar := _btn.get_parent()
-	if bar == null:
-		return
-	for c in bar.get_children():
+func _find_builtin_bake_button() -> Button:
+	if _builtin_btn != null and is_instance_valid(_builtin_btn):
+		return _builtin_btn
+	if _btn == null or _btn.get_parent() == null:
+		return null
+	for c in _btn.get_parent().get_children():
 		if c != _btn and c is Button and "Bake Lightmap" in (c as Button).text:
-			(c as Button).visible = false
+			_builtin_btn = c
+			if not _builtin_btn.visibility_changed.is_connected(_on_builtin_vis):
+				_builtin_btn.visibility_changed.connect(_on_builtin_vis)
+			return _builtin_btn
+	return null
+
+
+# re-hide the built-in bake button whenever it reappears while our node is selected
+func _on_builtin_vis() -> void:
+	if _current != null and _builtin_btn != null and _builtin_btn.visible:
+		_builtin_btn.visible = false
 
 
 func _blender_path() -> String:
