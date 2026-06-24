@@ -105,17 +105,24 @@ func _on_bake_pressed() -> void:
 		push_error("pavlaka: open a 3D scene first")
 		return
 	# progress dialog so the editor shows feedback instead of appearing frozen
+	# NON-exclusive: an exclusive popup force-closes the editor's own reimport
+	# ProgressDialog during the import phase, corrupting its task list and crashing
+	# (progress_dialog.cpp). We also hide our dialog before the import stage so it never
+	# overlaps the editor's reimport progress.
 	var dlg := AcceptDialog.new()
 	dlg.title = "pavlaka"
 	dlg.get_ok_button().hide()
-	dlg.exclusive = true # block interaction (incl. another bake) until done
 	dlg.unresizable = true
 	dlg.min_size = Vector2i(360, 90)
 	dlg.dialog_text = "Starting…"
 	EditorInterface.get_base_control().add_child(dlg)
 	dlg.popup_centered()
 	var progress := func(msg: String):
-		if is_instance_valid(dlg):
+		if not is_instance_valid(dlg):
+			return
+		if msg.begins_with("Importing"):
+			dlg.hide() # let the editor's reimport progress dialog have the stage
+		else:
 			dlg.dialog_text = msg
 
 	var err: int = await PavlakaBaker.bake(root, _current, _blender_path(), _current.get_bake_opts(), progress)
