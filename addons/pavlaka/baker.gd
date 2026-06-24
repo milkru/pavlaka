@@ -161,14 +161,13 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 	data.set_lightmap_textures(textures)
 	data.set_uses_spherical_harmonics(false)
 	var bounds := _world_aabb(targets)
-	var sh := PackedColorArray()
-	sh.resize(9)
-	# one dummy probe point so set_capture_data applies real bounds (else the lightmap
-	# instance gets an empty AABB and is culled — see RESEARCH.md pitfall 6).
+	# Keep probe points EMPTY so no probe gizmo is drawn. set_capture_data then forces the
+	# RenderingServer bounds to empty, so we re-apply real bounds directly below (and the
+	# LightmapBlenderGI re-applies them on load) — otherwise the instance is culled.
 	data.call("_set_probe_data", {
 		"bounds": bounds,
-		"points": PackedVector3Array([bounds.get_center()]),
-		"sh": sh,
+		"points": PackedVector3Array(),
+		"sh": PackedColorArray(),
 		"tetrahedra": PackedInt32Array(),
 		"bsp": PackedInt32Array(),
 		"interior": false,
@@ -190,6 +189,11 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 		push_error("pavlaka: saving .lmbake failed (%d)" % err)
 		return err
 	lm.light_data = data
+	# Apply the real bounds to the RenderingServer now (this session) and store them on
+	# the node so they're re-applied on load — without any probe point (hence no gizmo).
+	RenderingServer.lightmap_set_probe_bounds(data.get_rid(), bounds)
+	if lm is LightmapBlenderGI:
+		(lm as LightmapBlenderGI).baked_bounds = bounds
 	print("pavlaka: baked %d mesh(es) -> %s" % [data.get_user_count(), lmbake])
 	return OK
 

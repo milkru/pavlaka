@@ -14,9 +14,12 @@ bake with a progress dialog + Cancel.
 
 ### Fixes / pitfalls found during implementation (beyond the source study)
 
-- **Empty probe points ⇒ culled lightmap** — a static `LightmapGIData` needs ≥1 probe
-  point + real bounds, or `set_capture_data` forces an empty AABB and the instance is
-  culled (renders unlit).
+- **Empty probe points ⇒ culled lightmap** — `set_capture_data` only applies bounds when
+  `points` is non-empty, else it forces an empty AABB and the lightmap instance is culled
+  (renders unlit). Rather than store a dummy probe point (which draws a probe gizmo), we
+  keep points empty and re-apply the real bounds directly via
+  `RenderingServer.lightmap_set_probe_bounds()` — right after baking, and again on load
+  via `LightmapBlenderGI` (it stores `baked_bounds` and re-applies on ENTER_TREE).
 - **Hidden nodes + `KHR_node_visibility`** — Godot 4.7 emits this *required* glTF
   extension for hidden nodes; Blender < 5.2 rejects the file. We export a reconstructed
   scene of visible meshes/lights only.

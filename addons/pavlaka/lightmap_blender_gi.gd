@@ -41,6 +41,23 @@ func get_bake_opts() -> Dictionary:
 	}
 
 
+# World-space bounds of the bake, stored (not shown) so we can re-apply them to the
+# RenderingServer on load. We keep the LightmapGIData's probe points EMPTY (so no probe
+# gizmo is drawn), but the lightmap instance still needs a non-empty AABB or it gets
+# culled — so we set the bounds directly here instead of via capture data.
+@export_storage var baked_bounds := AABB()
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_ENTER_TREE:
+		_apply_baked_bounds()
+
+
+func _apply_baked_bounds() -> void:
+	if light_data != null and baked_bounds.size != Vector3.ZERO:
+		RenderingServer.lightmap_set_probe_bounds(light_data.get_rid(), baked_bounds)
+
+
 # Hide the inherited LightmapGI properties (Quality, Bounces, Directional, etc.) — they
 # don't apply to a Blender bake and only confuse. Keep them stored (so light_data still
 # serializes) but out of the inspector.
