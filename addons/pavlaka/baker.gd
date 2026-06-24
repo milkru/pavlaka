@@ -30,7 +30,9 @@ class Target:
 
 ## Bake `lm`'s scene. Returns OK or an error code; messages go to the editor log.
 ## `progress` (optional) is called with a status String at each stage for UI feedback.
-static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dictionary = {}, progress := Callable()) -> int:
+## `cancelled` (optional) is a single-element Array; set cancelled[0]=true to abort the
+## bake — the running Blender process is killed and ERR_SKIP is returned.
+static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dictionary = {}, progress := Callable(), cancelled: Array = []) -> int:
 	var cfg := DEFAULTS.duplicate()
 	for k in opts:
 		cfg[k] = opts[k]
@@ -87,6 +89,10 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 		return ERR_CANT_CREATE
 	var start_ms := Time.get_ticks_msec()
 	while OS.is_process_running(pid):
+		if not cancelled.is_empty() and cancelled[0]:
+			OS.kill(pid)
+			print("pavlaka: bake cancelled")
+			return ERR_SKIP
 		_report(progress, "Baking in Blender…  %ds" % ((Time.get_ticks_msec() - start_ms) / 1000))
 		await Engine.get_main_loop().process_frame
 	# surface Blender's log for diagnostics (it mirrors everything bake.py printed)

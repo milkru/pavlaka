@@ -13,6 +13,7 @@ const SETTING_BLENDER := "pavlaka/blender_path"
 var _btn: Button
 var _builtin_btn: Button
 var _current: LightmapBlenderGI
+var _baking := false
 
 
 func _enter_tree() -> void:
@@ -97,6 +98,8 @@ func _blender_path() -> String:
 
 
 func _on_bake_pressed() -> void:
+	if _baking:
+		return # re-entry guard: a bake is already running
 	if _current == null:
 		push_error("pavlaka: select a LightmapBlenderGI node first")
 		return
@@ -104,17 +107,28 @@ func _on_bake_pressed() -> void:
 	if root == null or not (root is Node3D):
 		push_error("pavlaka: open a 3D scene first")
 		return
-	# progress dialog so the editor shows feedback instead of appearing frozen
+
+	_baking = true
+	if _btn:
+		_btn.disabled = true
+
+	# progress dialog so the editor shows feedback instead of appearing frozen.
 	# NON-exclusive: an exclusive popup force-closes the editor's own reimport
 	# ProgressDialog during the import phase, corrupting its task list and crashing
 	# (progress_dialog.cpp). We also hide our dialog before the import stage so it never
 	# overlaps the editor's reimport progress.
+	var cancelled := [false]
 	var dlg := AcceptDialog.new()
 	dlg.title = "pavlaka"
 	dlg.get_ok_button().hide()
 	dlg.unresizable = true
 	dlg.min_size = Vector2i(360, 90)
 	dlg.dialog_text = "Starting…"
+	var cancel_btn := dlg.add_button("Cancel", true, "cancel")
+	cancel_btn.pressed.connect(func():
+		cancelled[0] = true
+		if is_instance_valid(dlg):
+			dlg.dialog_text = "Cancelling…")
 	EditorInterface.get_base_control().add_child(dlg)
 	dlg.popup_centered()
 	var progress := func(msg: String):
@@ -125,12 +139,15 @@ func _on_bake_pressed() -> void:
 		else:
 			dlg.dialog_text = msg
 
-	var err: int = await PavlakaBaker.bake(root, _current, _blender_path(), _current.get_bake_opts(), progress)
+	var err: int = await PavlakaBaker.bake(root, _current, _blender_path(), _current.get_bake_opts(), progress, cancelled)
 
 	if is_instance_valid(dlg):
 		dlg.queue_free()
 	if err == OK:
 		EditorInterface.mark_scene_as_unsaved()
+	_baking = false
+	if _btn:
+		_btn.disabled = false
 
 
 # ---- headless self-test ----------------------------------------------------

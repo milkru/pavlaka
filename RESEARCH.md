@@ -1,5 +1,48 @@
 # Blender Lightmap Baking Integration for Godot
 
+## Implementation Status (current)
+
+**Implemented and working** on Godot 4.7 + Blender 4.1.1. See `README.md` for usage; the
+plugin lives in `addons/pavlaka/`. This document is the design record and source-grounded
+findings; the milestone notes further down (M0–M2c) trace how it was validated.
+
+Shipped: a `LightmapBlenderGI` node (extends `LightmapGI`) with a selection-driven "Bake
+with Blender" button; per-mesh irradiance bake in headless Blender (Diffuse / Direct+
+Indirect / Color OFF, OIDN-denoised) → per-mesh EXR slices → `CompressedTexture2DArray`
+→ a combined `LightmapGIData` saved as `.lmbake` and assigned to the node. Non-blocking
+bake with a progress dialog + Cancel.
+
+### Fixes / pitfalls found during implementation (beyond the source study)
+
+- **Empty probe points ⇒ culled lightmap** — a static `LightmapGIData` needs ≥1 probe
+  point + real bounds, or `set_capture_data` forces an empty AABB and the instance is
+  culled (renders unlit).
+- **Hidden nodes + `KHR_node_visibility`** — Godot 4.7 emits this *required* glTF
+  extension for hidden nodes; Blender < 5.2 rejects the file. We export a reconstructed
+  scene of visible meshes/lights only.
+- **`duplicate()` breaks on CSG** ("child disappeared while duplicating") and dropped
+  lights → only ambient baked. Fixed by building the export tree from scratch (copied
+  `MeshInstance3D` + `Light3D` in world space) instead of duplicating the live scene.
+- **Brand-new files after folder deletion** — `reimport_files` can't find files unknown
+  to the EditorFileSystem; trigger a `scan()` and wait for `filesystem_changed`. (And the
+  scan itself imports them, so calling `reimport_files` again trips a "recursive reimport"
+  guard — don't.)
+- **Black ambient** — a new Blender world's Background *color* defaults to ~black; set it
+  white so `ambient_energy` controls actual dome brightness.
+- **Stale UID warnings** — preserve an existing `.import` so the texture UID is stable
+  across re-bakes.
+- **Editor crash (signal 11)** — our progress dialog was *exclusive* and force-closed the
+  editor's own reimport `ProgressDialog`, corrupting its task list. Made it non-exclusive
+  and hidden during the import stage.
+- **GUI-only bake** — the editor's `ResourceLoader.load` only resolves already-imported
+  source files (headless on-demand-imports), so baking must run in the GUI editor.
+
+### Remaining (optional polish)
+
+Light-energy calibration (use each light's real intensity vs the fixed `sun_energy`),
+`WorldEnvironment`/sky → bake, auto-generate UV2 for meshes that lack it, space-efficient
+atlas packing.
+
 ## Vision
 
 Create a Godot editor plugin that uses Blender as an external lightmap baker, then imports the baked output back into Godot as native `LightmapGIData`.
