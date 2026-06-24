@@ -53,7 +53,7 @@ combines them.
 
 | Group | Property | Meaning |
 |---|---|---|
-| Blender Bake | `output_dir` | Where `.lmbake` + EXR slices are written (default `res://lightmaps`). |
+| Blender Bake | `output_dir` | Base dir for bake output (default `res://lightmaps`). Each bake writes to a per-scene subfolder mirroring the scene's path — e.g. `res://levels/forest.tscn` → `res://lightmaps/levels/forest/` — so same-named scenes in different folders never collide. Inside: one EXR per mesh named after the node + a `<scene>.lmbake`. |
 | Blender Bake | `atlas_size` | Per-mesh lightmap slice resolution. |
 | Blender Bake | `samples` | Cycles samples (denoised afterward). |
 | Ambient Dome | `ambient_energy` | Sky/ambient dome brightness (white × energy). |

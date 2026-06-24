@@ -69,8 +69,10 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 		push_error("pavlaka: glTF export failed (%d)" % err)
 		return err
 
-	# 3. run Blender headless to bake
-	var out_dir: String = cfg["out_dir"]
+	# 3. run Blender headless to bake.
+	# Per-scene output folder that mirrors the scene's path under the base dir, so two
+	# scenes with the same name in different folders never collide.
+	var out_dir := _scene_bake_dir(root, cfg["out_dir"])
 	DirAccess.make_dir_recursive_absolute(out_dir)
 	var amb: Color = cfg["ambient_color"]
 	var args := PackedStringArray([
@@ -125,7 +127,7 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 	var slice_paths := PackedStringArray()
 	var any_new := false
 	for m in baked_meshes:
-		var p: String = out_dir.path_join("baked_%d.exr" % int(m["slice_index"]))
+		var p: String = out_dir.path_join(m["file"])
 		if _write_exr_import(p): # true when a fresh .import was created (file is new)
 			any_new = true
 		efs.update_file(p)
@@ -181,8 +183,8 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 		var uv: Array = m["uv_scale"]
 		data.add_user(t.path, Rect2(uv[0], uv[1], uv[2], uv[3]), int(m["slice_index"]), -1)
 
-	# 7. save .lmbake and assign to the node
-	var lmbake := out_dir.path_join("%s.lmbake" % root.name.to_snake_case())
+	# 7. save .lmbake (named after the scene, i.e. the output folder's leaf) and assign
+	var lmbake := out_dir.path_join("%s.lmbake" % out_dir.get_file())
 	err = ResourceSaver.save(data, lmbake)
 	if err != OK:
 		push_error("pavlaka: saving .lmbake failed (%d)" % err)
@@ -239,13 +241,23 @@ static func _report(progress: Callable, msg: String) -> void:
 		progress.call(msg)
 
 
+# Per-scene output folder under `base`, mirroring the scene's res:// path so same-named
+# scenes in different folders don't collide (e.g. res://a/level.tscn -> base/a/level).
+static func _scene_bake_dir(root: Node, base: String) -> String:
+	var scene_path := root.scene_file_path
+	if scene_path.is_empty():
+		push_warning("pavlaka: scene not saved — baking into a folder named after the root node; save the scene for stable, collision-free paths")
+		return base.path_join(String(root.name).validate_filename())
+	return base.path_join(scene_path.trim_prefix("res://").get_basename())
+
+
 # Load all per-mesh slices (fresh from disk) into a slice-indexed array. Returns []
 # if any slice isn't importable yet, so the caller can fall back to a full scan.
 static func _load_slices(baked_meshes: Array, out_dir: String) -> Array:
 	var textures: Array = []
 	textures.resize(baked_meshes.size())
 	for m in baked_meshes:
-		var p: String = out_dir.path_join("baked_%d.exr" % int(m["slice_index"]))
+		var p: String = out_dir.path_join(m["file"])
 		var tex := ResourceLoader.load(p, "", ResourceLoader.CACHE_MODE_IGNORE)
 		if tex == null:
 			return []

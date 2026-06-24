@@ -13,6 +13,7 @@ The plugin runs this non-blocking and can't read stdout, so everything is mirror
 import bpy
 import sys
 import os
+import re
 import json
 import traceback
 
@@ -86,7 +87,7 @@ def denoise_over(image, out_path):
     return False
 
 
-def bake_one(scene, obj, slice_index):
+def bake_one(scene, obj, slice_index, slice_path):
     me = obj.data
     me.uv_layers.active_index = 1 if len(me.uv_layers) >= 2 else 0
 
@@ -113,17 +114,11 @@ def bake_one(scene, obj, slice_index):
     bpy.ops.object.bake(type='DIFFUSE', pass_filter={'DIRECT', 'INDIRECT'},
                         margin=16, use_clear=True)
 
-    slice_path = os.path.join(out_dir, "baked_%d.exr" % slice_index)
     img.filepath_raw = slice_path
     img.file_format = 'OPEN_EXR'
     img.save()
     if denoise_over(img, slice_path):
         out("PAVLAKA_BAKE: denoised slice %d" % slice_index)
-    return {
-        "name": obj.name,
-        "slice_index": slice_index,
-        "uv_scale": [0.0, 0.0, 1.0, 1.0],  # full-0..1 UV2 -> identity remap
-    }
 
 
 def main():
@@ -162,9 +157,26 @@ def main():
 
     meshes_meta = []
     errors = []
+    used_names = set()
     for slice_index, obj in enumerate(targets):
+        # name the slice after the node; de-dup (Godot allows same names under different
+        # parents) by appending an index so files never collide
+        base = re.sub(r'[^A-Za-z0-9_-]', '_', obj.name) or "mesh"
+        fname = base
+        n = 1
+        while fname in used_names:
+            fname = "%s_%d" % (base, n)
+            n += 1
+        used_names.add(fname)
+        slice_file = fname + ".exr"
         try:
-            meshes_meta.append(bake_one(scene, obj, slice_index))
+            bake_one(scene, obj, slice_index, os.path.join(out_dir, slice_file))
+            meshes_meta.append({
+                "name": obj.name,
+                "slice_index": slice_index,
+                "uv_scale": [0.0, 0.0, 1.0, 1.0],  # full-0..1 UV2 -> identity remap
+                "file": slice_file,
+            })
         except Exception as e:
             errors.append("%s: %s" % (obj.name, e))
             out("PAVLAKA_BAKE: ERROR baking %s:\n%s" % (obj.name, traceback.format_exc()))
