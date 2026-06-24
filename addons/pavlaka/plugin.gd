@@ -29,32 +29,36 @@ func _enter_tree() -> void:
 	_btn = Button.new()
 	_btn.text = "Bake with Blender"
 	_btn.pressed.connect(_on_bake_pressed)
-	_btn.visible = false # shown only while a LightmapBlenderGI is selected
+	_btn.hide() # shown only while a LightmapBlenderGI is selected
 	add_control_to_container(CONTAINER_SPATIAL_EDITOR_MENU, _btn)
+
+	# drive button visibility from the editor selection (reliable across selections)
+	EditorInterface.get_selection().selection_changed.connect(_on_selection_changed)
+	_on_selection_changed()
 
 	if OS.get_environment("PAVLAKA_AUTOBAKE") != "":
 		call_deferred("_autobake")
 
 
 func _exit_tree() -> void:
+	var sel := EditorInterface.get_selection()
+	if sel.selection_changed.is_connected(_on_selection_changed):
+		sel.selection_changed.disconnect(_on_selection_changed)
 	if _btn:
 		remove_control_from_container(CONTAINER_SPATIAL_EDITOR_MENU, _btn)
 		_btn.queue_free()
 		_btn = null
 
 
-# --- selection-driven button (like the built-in LightmapGI bake button) -----
-func _handles(object: Object) -> bool:
-	return object is LightmapBlenderGI
-
-
-func _edit(object: Object) -> void:
-	_current = object as LightmapBlenderGI
-
-
-func _make_visible(visible: bool) -> void:
+# show the bake button only while a LightmapBlenderGI node is selected
+func _on_selection_changed() -> void:
+	_current = null
+	for n in EditorInterface.get_selection().get_selected_nodes():
+		if n is LightmapBlenderGI:
+			_current = n
+			break
 	if _btn:
-		_btn.visible = visible
+		_btn.visible = _current != null
 
 
 func _blender_path() -> String:
