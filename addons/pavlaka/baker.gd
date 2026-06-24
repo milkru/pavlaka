@@ -46,18 +46,22 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 	print("pavlaka: %d lightmap target(s): %s" % [targets.size(),
 		targets.map(func(t): return t.name)])
 
-	# 2. export the whole scene (geometry + lights) to a temp glb for Blender
+	# 2. export the scene (geometry + lights) to a temp glb for Blender.
+	# Export a duplicate with hidden nodes pruned: hidden meshes shouldn't bake anyway,
+	# and a hidden node makes Godot emit a *required* KHR_node_visibility glTF extension
+	# that older Blender importers reject outright.
 	DirAccess.make_dir_recursive_absolute("user://pavlaka_tmp")
 	var glb_abs := ProjectSettings.globalize_path("user://pavlaka_tmp/scene.glb")
+	var export_root := root.duplicate()
+	_prune_hidden(export_root)
 	var doc := GLTFDocument.new()
 	var state := GLTFState.new()
-	var err := doc.append_from_scene(root, state)
+	var err := doc.append_from_scene(export_root, state)
+	if err == OK:
+		err = doc.write_to_filesystem(state, glb_abs)
+	export_root.free()
 	if err != OK:
-		push_error("pavlaka: glTF append failed (%d)" % err)
-		return err
-	err = doc.write_to_filesystem(state, glb_abs)
-	if err != OK:
-		push_error("pavlaka: glTF write failed (%d)" % err)
+		push_error("pavlaka: glTF export failed (%d)" % err)
 		return err
 
 	# 3. run Blender headless to bake
@@ -143,7 +147,8 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 static func _collect(node: Node, lm: LightmapGI, out: Array[Target]) -> void:
 	if node is MeshInstance3D:
 		var mi := node as MeshInstance3D
-		if mi.gi_mode == GeometryInstance3D.GI_MODE_STATIC and _has_uv2(mi.mesh):
+		# hidden meshes don't bake (and are pruned from the export); skip them as targets
+		if mi.visible and mi.gi_mode == GeometryInstance3D.GI_MODE_STATIC and _has_uv2(mi.mesh):
 			var t := Target.new()
 			t.node = mi
 			t.path = lm.get_path_to(mi)
@@ -151,6 +156,17 @@ static func _collect(node: Node, lm: LightmapGI, out: Array[Target]) -> void:
 			out.append(t)
 	for c in node.get_children():
 		_collect(c, lm, out)
+
+
+# remove non-visible Node3Ds from a (duplicated) export tree so they're neither baked
+# nor trigger the required KHR_node_visibility glTF extension older Blenders reject
+static func _prune_hidden(node: Node) -> void:
+	for c in node.get_children():
+		if c is Node3D and not (c as Node3D).visible:
+			node.remove_child(c)
+			c.free()
+		else:
+			_prune_hidden(c)
 
 
 static func _has_uv2(mesh: Mesh) -> bool:

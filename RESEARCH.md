@@ -371,6 +371,15 @@ This is the next decision to make before building past M1.
     left active double-lights static geometry in real time (and with shadows off, washes
     out the baked shadow). The verify scene disables real-time lights so only the
     lightmap contributes; the plugin should eventually manage this for the user.
+- **glTF export pitfall — hidden nodes + KHR_node_visibility (found in real use).**
+  Godot 4.7's glTF exporter emits a *required* `KHR_node_visibility` extension whenever
+  any exported node has `visible == false` (`gltf_document.cpp:396`). Older Blender glTF
+  importers (e.g. 4.1) reject required extensions they don't know, failing the whole
+  import with `RuntimeError: Extension KHR_node_visibility is not available`. Common
+  trigger: hidden source CSG nodes left after "Bake Mesh Instance". Fix: the baker
+  exports a duplicate of the scene with non-visible `Node3D`s pruned (`_prune_hidden`) —
+  which also matches the rule that hidden meshes shouldn't bake — so no hidden node is
+  exported and the extension is never emitted. (Alternative would be a newer Blender.)
 - **Remaining polish (all optional):** light double-count handling, energy calibration,
   `WorldEnvironment` wiring, space-efficient atlas packing, a settings UI (Blender path /
   resolution / samples), and the option-A path (Blender owns UV2).
