@@ -11,7 +11,7 @@ config_version=5
 [application]
 
 config/name="pavlaka-poc"
-run/main_scene="res://poc/render_multi.tscn"
+run/main_scene="res://poc/verify_baked.tscn"
 config/features=PackedStringArray("4.7")
 
 [editor_plugins]

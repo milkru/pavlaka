@@ -49,17 +49,14 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 		targets.map(func(t): return t.name)])
 
 	# 2. export the scene (geometry + lights) to a temp glb for Blender.
-	# Export a duplicate with hidden nodes pruned: hidden meshes shouldn't bake anyway,
-	# and a hidden node makes Godot emit a *required* KHR_node_visibility glTF extension
-	# that older Blender importers reject outright.
+	# Build a fresh export tree (copied meshes + lights, in world space) instead of
+	# duplicating the live scene: duplicate() chokes on CSG nodes ("child disappeared
+	# while duplicating") which silently dropped lights. This also naturally excludes
+	# hidden nodes (so no required KHR_node_visibility extension older Blenders reject).
 	_report(progress, "Exporting scene…")
 	DirAccess.make_dir_recursive_absolute("user://pavlaka_tmp")
 	var glb_abs := ProjectSettings.globalize_path("user://pavlaka_tmp/scene.glb")
-	var export_root := root.duplicate()
-	_prune_hidden(export_root)
-	# GLTFDocument.append_from_scene only exports nodes owned by the scene root; a
-	# duplicated tree can lose those owner links, so re-own every node explicitly.
-	_reown(export_root, export_root)
+	var export_root := _build_export_scene(root)
 	var doc := GLTFDocument.new()
 	var state := GLTFState.new()
 	var err := doc.append_from_scene(export_root, state)
@@ -200,22 +197,32 @@ static func _collect(node: Node, lm: LightmapGI, out: Array[Target]) -> void:
 		_collect(c, lm, out)
 
 
-# remove non-visible Node3Ds from a (duplicated) export tree so they're neither baked
-# nor trigger the required KHR_node_visibility glTF extension older Blenders reject
-static func _prune_hidden(node: Node) -> void:
-	for c in node.get_children():
-		if c is Node3D and not (c as Node3D).visible:
-			node.remove_child(c)
-			c.free()
-		else:
-			_prune_hidden(c)
+# Build a flat export scene of copied visible meshes + lights (in world space). Avoids
+# duplicating the live tree (CSG nodes break duplicate()), and only includes what the
+# bake needs. All meshes occlude/bounce; bake.py bakes the ones that carry a UV2.
+static func _build_export_scene(root: Node) -> Node3D:
+	var export_root := Node3D.new()
+	export_root.name = root.name
+	_gather_into(root, export_root)
+	return export_root
 
 
-# set every descendant's owner to the scene root so GLTFDocument exports them
-static func _reown(node: Node, owner_root: Node) -> void:
+static func _gather_into(node: Node, export_root: Node3D) -> void:
 	for c in node.get_children():
-		c.owner = owner_root
-		_reown(c, owner_root)
+		if c is MeshInstance3D and (c as MeshInstance3D).is_visible_in_tree() and (c as MeshInstance3D).mesh != null:
+			var mi := c as MeshInstance3D
+			var copy := MeshInstance3D.new()
+			copy.name = mi.name
+			copy.mesh = mi.mesh
+			copy.transform = mi.global_transform
+			export_root.add_child(copy)
+			copy.owner = export_root
+		elif c is Light3D and (c as Light3D).is_visible_in_tree():
+			var lcopy: Light3D = (c as Light3D).duplicate()
+			lcopy.transform = (c as Light3D).global_transform
+			export_root.add_child(lcopy)
+			lcopy.owner = export_root
+		_gather_into(c, export_root)
 
 
 static func _report(progress: Callable, msg: String) -> void:
