@@ -201,16 +201,41 @@ func _on_bake_pressed() -> void:
 	# overlaps the editor's reimport progress.
 	var cancelled := [false]
 	var dlg := AcceptDialog.new()
-	dlg.title = "pavlaka"
+	dlg.title = "Bake with Blender"
 	dlg.get_ok_button().hide()
 	dlg.unresizable = true
-	dlg.min_size = Vector2i(360, 90)
-	dlg.dialog_text = "Starting…"
-	var cancel_btn := dlg.add_button("Cancel", true, "cancel")
-	cancel_btn.pressed.connect(func():
+	dlg.min_size = Vector2i(420, 0)
+
+	var margin := MarginContainer.new()
+	for side in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
+		margin.add_theme_constant_override(side, 18)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 12)
+	var heading := Label.new()
+	heading.text = "Baking lightmaps with Blender"
+	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	heading.add_theme_font_size_override("font_size", 15)
+	var bar := ProgressBar.new()
+	bar.indeterminate = true
+	bar.editor_preview_indeterminate = true
+	bar.show_percentage = false
+	bar.custom_minimum_size = Vector2(0, 6)
+	var status := Label.new()
+	status.text = "Starting…"
+	status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	status.modulate = Color(1, 1, 1, 0.6)
+	vb.add_child(heading)
+	vb.add_child(bar)
+	vb.add_child(status)
+	margin.add_child(vb)
+	dlg.add_child(margin)
+
+	var on_cancel := func():
 		cancelled[0] = true
-		if is_instance_valid(dlg):
-			dlg.dialog_text = "Cancelling…")
+		if is_instance_valid(status):
+			status.text = "Cancelling…"
+	dlg.add_button("Cancel", true, "cancel").pressed.connect(on_cancel)
+	dlg.canceled.connect(on_cancel) # closing the dialog (X / Esc) also cancels the bake
 	EditorInterface.get_base_control().add_child(dlg)
 	dlg.popup_centered()
 	var progress := func(msg: String):
@@ -218,8 +243,8 @@ func _on_bake_pressed() -> void:
 			return
 		if msg.begins_with("Importing"):
 			dlg.hide() # let the editor's reimport progress dialog have the stage
-		else:
-			dlg.dialog_text = msg
+		elif is_instance_valid(status):
+			status.text = msg
 
 	var err: int = await PavlakaBaker.bake(root, _current, blender, _current.get_bake_opts(), progress, cancelled)
 
