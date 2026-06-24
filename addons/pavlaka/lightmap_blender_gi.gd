@@ -14,8 +14,8 @@ extends LightmapGI
 @export_dir var output_dir: String = "res://lightmaps"
 ## Resolution of each per-mesh lightmap slice (square).
 @export var atlas_size: int = 512
-## Cycles samples per bake. The OIDN denoise pass cleans up remaining noise.
-@export var samples: int = 256
+# Quality (Low/Medium/High/Ultra) reuses LightmapGI's own inherited "quality" property and
+# maps to Cycles samples in the baker (see _validate_property / get_bake_opts).
 
 # NOTE: the Environment section (Mode / Custom Sky / Custom Color / Custom Energy) is
 # LightmapGI's own — we don't redefine it, just keep it visible (see _validate_property)
@@ -32,7 +32,7 @@ func get_bake_opts() -> Dictionary:
 	return {
 		"out_dir": output_dir,
 		"atlas": atlas_size,
-		"samples": samples,
+		"quality": quality, # inherited LightmapGI property; mapped to samples in the baker
 		"light_energy_scale": light_energy_scale,
 		# these are LightmapGI's own inherited Environment properties
 		"environment_mode": environment_mode,
@@ -68,6 +68,7 @@ var _inherited_props: Dictionary = {}
 # LightmapGI's Environment properties are kept visible (it's the section we DO want);
 # its own _validate_property still hides the custom sky/color by mode.
 const _KEEP_VISIBLE := {
+	"quality": true,
 	"environment_mode": true, "environment_custom_sky": true,
 	"environment_custom_color": true, "environment_custom_energy": true,
 }

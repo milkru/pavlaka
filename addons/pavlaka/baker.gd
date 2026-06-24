@@ -15,7 +15,7 @@ const BAKE_SCRIPT := "res://addons/pavlaka/bake.py"
 const DEFAULTS := {
 	"out_dir": "res://lightmaps/",
 	"atlas": 512,
-	"samples": 256,
+	"quality": 1, # LightmapGI BakeQuality: 0 Low, 1 Medium, 2 High, 3 Ultra
 	"light_energy_scale": 1.0,
 	"environment_mode": 1, # SCENE
 	"environment_custom_sky": null,
@@ -89,7 +89,7 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 	var env := _resolve_environment(root, cfg)
 	var params := {
 		"atlas": cfg["atlas"],
-		"samples": cfg["samples"],
+		"samples": _samples_for_quality(int(cfg["quality"])),
 		"light_energy_scale": cfg["light_energy_scale"],
 		"lights": lights,
 		"sky_panorama": env["sky_panorama"],
@@ -332,6 +332,15 @@ static func _gather_into(node: Node, export_root: Node3D) -> void:
 static func _report(progress: Callable, msg: String) -> void:
 	if progress.is_valid():
 		progress.call(msg)
+
+
+# map LightmapGI BakeQuality (Low/Medium/High/Ultra) to Cycles samples (denoise cleans up)
+static func _samples_for_quality(q: int) -> int:
+	match q:
+		0: return 64    # Low
+		2: return 256   # High
+		3: return 512   # Ultra
+	return 128          # Medium (default)
 
 
 # Per-scene output folder under `base`, mirroring the scene's res:// path so same-named
