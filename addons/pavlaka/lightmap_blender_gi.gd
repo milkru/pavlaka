@@ -39,3 +39,17 @@ func get_bake_opts() -> Dictionary:
 		"ambient_color": ambient_color,
 		"sun_energy": sun_energy,
 	}
+
+
+# Hide the inherited LightmapGI properties (Quality, Bounces, Directional, etc.) — they
+# don't apply to a Blender bake and only confuse. Keep them stored (so light_data still
+# serializes) but out of the inspector.
+var _inherited_props: Dictionary = {}
+
+
+func _validate_property(property: Dictionary) -> void:
+	if _inherited_props.is_empty():
+		for p in ClassDB.class_get_property_list("LightmapGI", true):
+			_inherited_props[p.name] = true
+	if _inherited_props.has(property.name):
+		property.usage &= ~PROPERTY_USAGE_EDITOR

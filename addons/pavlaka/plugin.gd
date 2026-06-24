@@ -59,6 +59,22 @@ func _on_selection_changed() -> void:
 			break
 	if _btn:
 		_btn.visible = _current != null
+	if _current != null:
+		# LightmapBlenderGI is-a LightmapGI, so Godot's built-in editor plugin also shows
+		# its "Bake Lightmaps" button. Hide it (deferred, after the built-in shows it) so
+		# only our button remains. Re-shown automatically for plain LightmapGI nodes.
+		call_deferred("_hide_builtin_bake_button")
+
+
+func _hide_builtin_bake_button() -> void:
+	if _btn == null:
+		return
+	var bar := _btn.get_parent()
+	if bar == null:
+		return
+	for c in bar.get_children():
+		if c != _btn and c is Button and "Bake Lightmap" in (c as Button).text:
+			(c as Button).visible = false
 
 
 func _blender_path() -> String:
