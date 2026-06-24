@@ -17,6 +17,7 @@ var _baking := false
 
 
 func _enter_tree() -> void:
+	_baking = false # reset on (re)load so an interrupted bake can't leave it stuck
 	if not ProjectSettings.has_setting(SETTING_BLENDER):
 		ProjectSettings.set_setting(SETTING_BLENDER, "")
 	ProjectSettings.set_initial_value(SETTING_BLENDER, "")
@@ -70,8 +71,7 @@ func _on_selection_changed() -> void:
 		if n is LightmapBlenderGI:
 			_current = n
 			break
-	if _btn:
-		_btn.visible = _current != null
+	_update_button()
 	# LightmapBlenderGI is-a LightmapGI, so Godot's built-in editor plugin also shows its
 	# "Bake Lightmaps" button. Hide it while our node is selected (and re-hide if the
 	# built-in plugin pops it back up — see _on_builtin_vis). Plain LightmapGI nodes are
@@ -79,6 +79,18 @@ func _on_selection_changed() -> void:
 	var b := _find_builtin_bake_button()
 	if b and _current != null:
 		b.visible = false
+
+
+# single source of truth for the button: shown only with a LightmapBlenderGI selected,
+# and disabled while baking or when the Blender path is unset/invalid (with a tooltip).
+func _update_button() -> void:
+	if _btn == null:
+		return
+	_btn.visible = _current != null
+	var path := _blender_path()
+	var path_ok := not path.is_empty() and FileAccess.file_exists(path)
+	_btn.disabled = _baking or not path_ok
+	_btn.tooltip_text = "" if path_ok else "Set the Blender path in Project Settings → pavlaka/blender_path"
 
 
 func _find_builtin_bake_button() -> Button:
@@ -174,8 +186,7 @@ func _on_bake_pressed() -> void:
 		return
 
 	_baking = true
-	if _btn:
-		_btn.disabled = true
+	_update_button()
 
 	# progress dialog so the editor shows feedback instead of appearing frozen.
 	# NON-exclusive: an exclusive popup force-closes the editor's own reimport
@@ -211,8 +222,7 @@ func _on_bake_pressed() -> void:
 	if err == OK:
 		EditorInterface.mark_scene_as_unsaved()
 	_baking = false
-	if _btn:
-		_btn.disabled = false
+	_update_button()
 
 
 # ---- headless self-test ----------------------------------------------------
