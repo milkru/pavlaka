@@ -43,6 +43,9 @@ func _enter_tree() -> void:
 	_btn = Button.new()
 	_btn.text = "Bake with Blender"
 	_btn.pressed.connect(_on_bake_pressed)
+	var theme := EditorInterface.get_editor_theme()
+	if theme != null and theme.has_icon("Bake", "EditorIcons"):
+		_btn.icon = theme.get_icon("Bake", "EditorIcons") # match the built-in bake button
 	_btn.hide() # shown only while a LightmapBlenderGI is selected
 	add_control_to_container(CONTAINER_SPATIAL_EDITOR_MENU, _btn)
 
