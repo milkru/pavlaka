@@ -185,22 +185,21 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 	# a full scan only for brand-new files the EditorFileSystem doesn't know yet.
 	var efs := EditorInterface.get_resource_filesystem()
 	var page_paths := PackedStringArray()
-	var fresh_any := false
 	for i in n_pages:
 		var pp := out_dir.path_join("%s_%d.exr" % [out_dir.get_file(), i])
 		if (page_imgs[i] as Image).save_exr(pp) != OK:
 			push_error("pavlaka: failed to save lightmap page %s" % pp)
 			return ERR_CANT_CREATE
-		if _write_exr_import(pp):
-			fresh_any = true
+		_write_exr_import(pp)
 		efs.update_file(pp)
 		page_paths.append(pp)
-	_cleanup_stale_pages(out_dir, n_pages) # drop pages left by a denser previous bake
-	var page_texes: Array = []
-	if not fresh_any:
-		efs.reimport_files(page_paths)
-		page_texes = _load_pages(page_paths)
+	# update_file registers each page, so reimport_files imports them synchronously. This is
+	# reliable whether the page is new or a re-bake — unlike relying on a scan's timing, which
+	# fails to import a new page when another lightmap already exists in the folder.
+	efs.reimport_files(page_paths)
+	var page_texes := _load_pages(page_paths)
 	if page_texes.is_empty():
+		# last resort: a full rescan (e.g. the output folder itself is unknown), then retry
 		var scanned := [false]
 		var on_changed := func(): scanned[0] = true
 		efs.filesystem_changed.connect(on_changed)
@@ -211,6 +210,7 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 			frames += 1
 		if efs.filesystem_changed.is_connected(on_changed):
 			efs.filesystem_changed.disconnect(on_changed)
+		efs.reimport_files(page_paths)
 		page_texes = _load_pages(page_paths)
 		if page_texes.is_empty():
 			push_error("pavlaka: failed to import baked lightmap pages (see Output)")
@@ -259,6 +259,10 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 	RenderingServer.lightmap_set_probe_bounds(data.get_rid(), bounds)
 	if lm is LightmapBlenderGI:
 		(lm as LightmapBlenderGI).baked_bounds = bounds
+	# drop pages left by a denser previous bake (+ the pre-multi-page single atlas). Done
+	# last, after the new pages are imported — deleting tracked files mid-import corrupts the
+	# EditorFileSystem scan and the new pages fail to import.
+	_cleanup_stale_pages(out_dir, n_pages)
 	var secs := (Time.get_ticks_msec() - bake_start) / 1000
 	var took := ("%d m %d s" % [secs / 60, secs % 60]) if secs >= 60 else ("%d s" % secs)
 	print("pavlaka: baked %d mesh(es) into %d page(s) of %dpx in %s -> %s"
