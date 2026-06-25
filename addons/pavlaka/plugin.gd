@@ -246,10 +246,10 @@ func _on_bake_pressed() -> void:
 	var vb := VBoxContainer.new()
 	vb.add_theme_constant_override("separation", 8)
 
-	# indeterminate (cycling) bar — we can't know Blender's progress — over an elapsed line
+	# A blocky filled bar like the built-in bake popup. Plain (non-indeterminate) so it uses
+	# the same chunky theme as LightmapGI's bar instead of the thin rounded indeterminate
+	# style; we loop its fill below for the "loading" feel (Blender's progress is unknown).
 	var bar := ProgressBar.new()
-	bar.indeterminate = true
-	bar.editor_preview_indeterminate = true
 	bar.show_percentage = false
 	bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
@@ -285,6 +285,11 @@ func _on_bake_pressed() -> void:
 	EditorInterface.get_base_control().add_child(dlg)
 	dlg.popup_centered()
 	_set_window_icon(dlg)
+
+	# loop the fill 0 -> 100 so it reads as a "loading" bar while keeping the blocky look
+	# (tween must be created once the bar is in the tree)
+	var tw := bar.create_tween().set_loops()
+	tw.tween_property(bar, "value", 100.0, 1.5).from(0.0)
 
 	var err: int = await PavlakaBaker.bake(root, _current, blender, _current.get_bake_opts(), Callable(), cancelled)
 
