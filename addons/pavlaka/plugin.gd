@@ -125,6 +125,22 @@ func _find_builtin_bake_button() -> Button:
 	return null
 
 
+# Put the Blender logo on the bake dialog's title bar. Only works when the dialog is a
+# native OS window — Godot's embedded subwindow title bar has no icon slot, and
+# get_window_id() there is the editor's main window, so we'd clobber the editor's icon.
+# Loaded straight from disk (no import dependency); silently skipped if the file is absent.
+func _set_window_icon(dlg: Window) -> void:
+	if dlg.is_embedded():
+		return
+	var icon_path := (get_script() as Script).resource_path.get_base_dir().path_join(
+		"blender_logo_kit/square/blender_icon_128x128.png")
+	if not FileAccess.file_exists(icon_path):
+		return
+	var img := Image.load_from_file(icon_path)
+	if img != null:
+		DisplayServer.window_set_icon(img, dlg.get_window_id())
+
+
 # re-hide the built-in bake button whenever it reappears while our node is selected
 func _on_builtin_vis() -> void:
 	if _current != null and _builtin_btn != null and _builtin_btn.visible:
@@ -250,6 +266,7 @@ func _on_bake_pressed() -> void:
 	dlg.canceled.connect(on_cancel) # closing the dialog (X / Esc) also cancels the bake
 	EditorInterface.get_base_control().add_child(dlg)
 	dlg.popup_centered()
+	_set_window_icon(dlg)
 	var progress := func(msg: String):
 		if not is_instance_valid(dlg):
 			return
