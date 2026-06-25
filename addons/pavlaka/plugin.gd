@@ -126,7 +126,11 @@ func _update_button() -> void:
 func _build_progress_strip() -> void:
 	_progress = HBoxContainer.new()
 	_progress.add_theme_constant_override("separation", 6)
-	_progress.custom_minimum_size = Vector2(0, 28) # a bit thicker than the default toolbar row
+	# match the bake button's height exactly (it's theme/DPI dependent, so read it, don't
+	# hardcode); _btn is already created and themed by the time we build the strip
+	var row_h := _btn.get_combined_minimum_size().y if _btn else 0.0
+	if row_h > 0.0:
+		_progress.custom_minimum_size = Vector2(0, row_h)
 	# small spacer so the logo isn't flush against the strip's left edge
 	var lead := Control.new()
 	lead.custom_minimum_size = Vector2(6, 0)
