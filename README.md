@@ -4,8 +4,8 @@ Bake Godot lightmaps externally in **Blender (Cycles)** and import them back as 
 **`LightmapGIData`**. A Godot editor plugin that adds a `LightmapBlenderGI` node with a
 "Bake with Blender" button, mirroring the built-in `LightmapGI` workflow.
 
-Targets **Godot 4.7** (engine internals are version-specific; long-term compatibility is
-not a goal). The Blender side uses the long-stable bake API and works on **Blender 4.x**
+Targets **Godot 4.7**. Engine internals are version specific, so long term compatibility
+is not a goal. The Blender side uses the long stable bake API and works on **Blender 4.x**
 (developed against 4.1.1).
 
 ## How it works
@@ -44,42 +44,45 @@ combines them.
    **Meshes → Light Baking = "Static Lightmaps"** → Reimport (Godot generates UV2 and
    marks them static). Meshes without UV2 are skipped.
 3. Add at least one light and set its **Bake Mode = Static** (only Static lights are
-   baked), or rely on the Environment (scene sky / Custom Color) for an ambient-occlusion
+   baked), or rely on the Environment (scene sky or Custom Color) for an ambient occlusion
    bake.
 4. Select the `LightmapBlenderGI` and press **Bake with Blender** in the 3D toolbar.
    A progress dialog shows the stages; **Cancel** aborts the running bake.
-5. After baking, **disable or hide the real-time lights** you baked, otherwise they
-   double-light the static geometry and wash out the baked result. (Or keep them as fill.)
+5. After baking, **disable or hide the real time lights** you baked, otherwise they
+   double light the static geometry and wash out the baked result. (Or keep them as fill.)
 
 ### Node parameters (`LightmapBlenderGI`)
 
 | Group | Property | Meaning |
 |---|---|---|
-| Blender Bake | `output_dir` | Base dir for bake output (default `res://lightmaps`). Each bake writes to a per-scene subfolder mirroring the scene's path — e.g. `res://levels/forest.tscn` → `res://lightmaps/levels/forest/` — so same-named scenes in different folders never collide. Inside: one EXR per mesh named after the node + a `<scene>.lmbake`. |
+| Blender Bake | `output_dir` | Base dir for bake output (default `res://lightmaps`). Each bake writes to a per-scene subfolder mirroring the scene's path, so `res://levels/forest.tscn` goes to `res://lightmaps/levels/forest/` and same-named scenes in different folders never collide. Inside: one EXR per mesh named after the node, plus a `<scene>.lmbake`. |
 | Blender Bake | `atlas_size` | Per-mesh lightmap slice resolution. |
 | Tweaks | `Quality` | LightmapGI's own Quality dropdown (Low/Medium/High/Ultra), mapped to Cycles samples (64/128/256/512; denoised afterward). |
-| Environment | `Mode` | LightmapGI's own Environment Mode, used for the bake's ambient/sky: **Disabled** (none), **Scene** (bake the scene's `WorldEnvironment` sky to a panorama), **Custom Sky** (bake a given `Sky`), **Custom Color** (flat color). |
-| Environment | `Custom Sky` / `Custom Color` / `Custom Energy` | Used by the Custom Sky / Custom Color modes (energy scales either). |
-| Lights | `light_energy_scale` | Multiplier on each **Static** light's own energy/color during the bake (only `Bake Mode = Static` lights contribute). Tune if baked brightness doesn't match the in-editor lighting. |
+| Environment | `Mode` | LightmapGI's own Environment Mode, used for the bake's ambient and sky: **Disabled** (none), **Scene** (bake the scene's `WorldEnvironment` sky to a panorama), **Custom Sky** (bake a given `Sky`), **Custom Color** (flat color). |
+| Environment | `Custom Sky` / `Custom Color` / `Custom Energy` | Used by the Custom Sky and Custom Color modes (energy scales either). |
+| Lights | `light_energy_scale` | Multiplier on each **Static** light's own energy and color during the bake (only `Bake Mode = Static` lights contribute). Tune if baked brightness doesn't match the in-editor lighting. |
 
-The inherited `LightmapGI` settings (Quality, Bounces, etc.) are hidden — baking is
+The inherited `LightmapGI` settings (Quality, Bounces, etc.) are hidden. Baking is
 controlled by the parameters above.
 
 ## Limitations / notes
 
-- **Brightness matching isn't automatic.** Each Static light's real energy/color is used,
-  but Godot's energy is dimensionless while Cycles uses physical units, so absolute
-  brightness may not match the viewport — tune `light_energy_scale`. **Point/spot** lights
-  match least well (Cycles' inverse-square falloff differs from Godot's model); directional
-  is the well-behaved case.
+- **Brightness matching isn't automatic.** Each Static light's real energy and color is
+  used, but Godot's energy is dimensionless while Cycles uses physical units, so absolute
+  brightness may not match the viewport. Tune `light_energy_scale`. **Point and spot**
+  lights match least well, because Cycles' inverse square falloff differs from Godot's
+  model; directional lights are the well behaved case.
 - **Sky rotation isn't applied.** A baked `WorldEnvironment` sky ignores Godot's
-  `sky_rotation` (negligible for low-frequency ambient/AO; get direct sun from a Static
-  `DirectionalLight3D`, not the sky).
-- **One slice per mesh** — no space-efficient atlas packing yet, and every mesh gets a
-  full-resolution slice regardless of size (Texture2DArray layers share dimensions).
-- **GUI-editor only** — baking relies on the editor filesystem to import the result, so
-  it's not a headless/CI operation.
-- The button-hiding of the built-in "Bake Lightmaps" matches the English label.
+  `sky_rotation` (negligible for low frequency ambient and AO; get direct sun from a
+  Static `DirectionalLight3D`, not the sky).
+- **One slice per mesh.** There is no space efficient atlas packing yet, and every mesh
+  gets a full resolution slice regardless of size (Texture2DArray layers share dimensions).
+- **Only works in the normal Godot editor, not headless.** The bake uses the editor's
+  filesystem to import the baked textures, so it can't run in headless mode (Godot launched
+  with no editor window, e.g. from a command line or CI build server).
+- **The editor must be in English.** When the node is selected the plugin hides Godot's
+  built-in "Bake Lightmaps" button by matching that text. In a non-English editor the text
+  is translated, so the built-in button won't be found and you'll see both buttons.
 
 See **[RESEARCH.md](RESEARCH.md)** for the design, the Godot 4.7 source findings, the
 data contract, and the pitfalls discovered while building this.
