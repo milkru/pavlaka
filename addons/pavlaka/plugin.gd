@@ -158,14 +158,14 @@ func _build_progress_strip() -> void:
 	var lead := Control.new()
 	lead.custom_minimum_size = Vector2(6, 0)
 	_progress.add_child(lead)
-	var strip_h := int(round(18.0 * EditorInterface.get_editor_scale()))
-	var logo := _logo(strip_h) # rasterized from the SVG at exactly this size
+	var icon_px := int(round(16.0 * EditorInterface.get_editor_scale())) # match the bake button's icon
+	var logo := _logo(icon_px) # rasterized from the SVG at exactly this size
 	if logo != null:
 		var icon := TextureRect.new()
 		icon.texture = logo
 		icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		icon.custom_minimum_size = Vector2(strip_h, strip_h)
+		icon.custom_minimum_size = Vector2(icon_px, icon_px)
 		icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		_progress.add_child(icon)
 	_progress_label = Label.new()
