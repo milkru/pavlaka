@@ -125,28 +125,6 @@ func _find_builtin_bake_button() -> Button:
 	return null
 
 
-# Put the Blender logo on the bake dialog's title bar. Only works when the dialog is a
-# native OS window — Godot's embedded subwindow title bar has no icon slot, and
-# get_window_id() there is the editor's main window, so we'd clobber the editor's icon.
-# Silently skipped if the icon resource is absent.
-func _set_window_icon(dlg: Window) -> void:
-	if dlg.is_embedded():
-		return
-	var tex := _load_addon_texture("blender_logo_kit/square/blender_icon_128x128.png")
-	if tex != null:
-		DisplayServer.window_set_icon(tex.get_image(), dlg.get_window_id())
-
-
-# Load an image shipped in the addon as its imported Texture2D. Using load() (rather than
-# Image.load_from_file) avoids the "won't work on export" warning and reuses the editor's
-# imported copy. Returns null if the resource isn't present/importable.
-func _load_addon_texture(rel_path: String) -> Texture2D:
-	var p := (get_script() as Script).resource_path.get_base_dir().path_join(rel_path)
-	if not ResourceLoader.exists(p):
-		return null
-	return load(p) as Texture2D
-
-
 # re-hide the built-in bake button whenever it reappears while our node is selected
 func _on_builtin_vis() -> void:
 	if _current != null and _builtin_btn != null and _builtin_btn.visible:
@@ -235,26 +213,35 @@ func _on_bake_pressed() -> void:
 	var cancelled := [false]
 	var dlg := AcceptDialog.new()
 	dlg.exclusive = false
+	# Borderless like LightmapGI's bake popup: no OS title bar/close button, just a panel
+	# with an in-dialog heading (so there's no title bar to carry the Blender icon).
+	dlg.set_flag(Window.FLAG_BORDERLESS, true)
 	dlg.title = "Bake with Blender"
 	dlg.get_ok_button().hide()
 	dlg.unresizable = true
-	dlg.min_size = Vector2i(360, 0)
+	dlg.min_size = Vector2i(460, 0)
 
 	var margin := MarginContainer.new()
-	for side in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
-		margin.add_theme_constant_override(side, 14)
+	margin.add_theme_constant_override("margin_left", 18)
+	margin.add_theme_constant_override("margin_right", 18)
+	margin.add_theme_constant_override("margin_top", 16)
+	margin.add_theme_constant_override("margin_bottom", 16)
 	var vb := VBoxContainer.new()
-	vb.add_theme_constant_override("separation", 8)
+	vb.add_theme_constant_override("separation", 12)
 
-	# Keep the cycling indeterminate indicator (Blender's progress is unknown), but restyle
-	# it to LightmapGI's chunky, sharp-edged look instead of the thin rounded default:
-	# taller, with the ProgressBar styleboxes' rounded corners squared off.
+	# heading, like LightmapGI's "Bake Lightmaps"
+	var heading := Label.new()
+	heading.text = "Bake with Blender"
+	heading.add_theme_font_size_override("font_size", 16)
+
+	# Cycling indeterminate bar (Blender's progress is unknown), restyled to LightmapGI's
+	# chunky, sharp-edged look (taller, squared corners) instead of the thin rounded default.
 	var bar := ProgressBar.new()
 	bar.indeterminate = true
 	bar.editor_preview_indeterminate = true
 	bar.show_percentage = false
 	bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	bar.custom_minimum_size = Vector2(0, 22)
+	bar.custom_minimum_size = Vector2(0, 30)
 	var bar_theme := EditorInterface.get_editor_theme()
 	if bar_theme != null:
 		for sb_name in ["background", "fill"]:
@@ -271,6 +258,7 @@ func _on_bake_pressed() -> void:
 	var status := Label.new()
 	status.text = "In the oven…  0 s"
 
+	vb.add_child(heading)
 	vb.add_child(bar)
 	vb.add_child(status)
 	margin.add_child(vb)
@@ -299,7 +287,6 @@ func _on_bake_pressed() -> void:
 	dlg.canceled.connect(on_cancel) # closing the dialog (X / Esc) also cancels the bake
 	EditorInterface.get_base_control().add_child(dlg)
 	dlg.popup_centered()
-	_set_window_icon(dlg)
 
 	var err: int = await PavlakaBaker.bake(root, _current, blender, _current.get_bake_opts(), Callable(), cancelled)
 
