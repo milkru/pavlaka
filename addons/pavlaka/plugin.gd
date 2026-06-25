@@ -226,15 +226,11 @@ func _on_bake_pressed() -> void:
 	var cancelled := [false]
 	var dlg := AcceptDialog.new()
 	dlg.exclusive = false
-	# Non-transient: AcceptDialog is transient by default, but on Windows a transient window
-	# can't also be always-on-top (it errors on open, and asserts during teardown on close).
-	dlg.transient = false
 	# Borderless like LightmapGI's bake popup: no OS title bar/close button, just a panel
-	# with an in-dialog heading (so there's no title bar to carry the Blender icon). It's
-	# dragged by the title row (see below). Always-on-top so it stays visible while you keep
-	# working in the editor during the (non-blocking) bake.
+	# with an in-dialog heading. Dragged by the title row (see below). Always-on-top is set
+	# AFTER popup() (further down) — popup() forces transient=true, and on Windows a transient
+	# window can't become always-on-top (it errors, and clearing it while on-top asserts).
 	dlg.set_flag(Window.FLAG_BORDERLESS, true)
-	dlg.always_on_top = true
 	dlg.title = "Bake with Blender"
 	dlg.get_ok_button().hide()
 	dlg.unresizable = true
@@ -324,6 +320,11 @@ func _on_bake_pressed() -> void:
 	dlg.canceled.connect(on_cancel) # closing the dialog (X / Esc) also cancels the bake
 	EditorInterface.get_base_control().add_child(dlg)
 	dlg.popup_centered()
+	# popup() forced transient=true; clear it (while not yet on-top), then go always-on-top.
+	# Order matters on Windows: a transient window can't become always-on-top, and clearing
+	# transient while already on-top asserts on teardown.
+	dlg.transient = false
+	dlg.always_on_top = true
 
 	var err: int = await PavlakaBaker.bake(root, _current, blender, _current.get_bake_opts(), Callable(), cancelled)
 
