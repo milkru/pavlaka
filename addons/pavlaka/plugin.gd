@@ -126,13 +126,18 @@ func _update_button() -> void:
 func _build_progress_strip() -> void:
 	_progress = HBoxContainer.new()
 	_progress.add_theme_constant_override("separation", 6)
+	_progress.custom_minimum_size = Vector2(0, 28) # a bit thicker than the default toolbar row
+	# small spacer so the logo isn't flush against the strip's left edge
+	var lead := Control.new()
+	lead.custom_minimum_size = Vector2(6, 0)
+	_progress.add_child(lead)
 	var icon_path := (get_script() as Script).resource_path.get_base_dir().path_join("blender_icon.png")
 	if ResourceLoader.exists(icon_path):
 		var icon := TextureRect.new()
 		icon.texture = load(icon_path)
 		icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		icon.custom_minimum_size = Vector2(16, 16)
+		icon.custom_minimum_size = Vector2(18, 18)
 		icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		_progress.add_child(icon)
 	_progress_label = Label.new()
