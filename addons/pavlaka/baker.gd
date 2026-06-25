@@ -12,6 +12,15 @@ extends RefCounted
 # so the plugin is self-contained: copying addons/pavlaka/ into any project is enough.
 const BAKE_SCRIPT := "res://addons/pavlaka/bake.py"
 
+# Ordered bake steps. The optional `progress` callback is called with an index into this
+# list as each step begins; the UI renders them as a checklist. Single source of truth so
+# the labels and the reported indices can't drift apart.
+const STEPS := ["Exporting scene", "Rendering in Blender", "Importing lightmaps", "Building LightmapGIData"]
+const STEP_EXPORT := 0
+const STEP_RENDER := 1
+const STEP_IMPORT := 2
+const STEP_BUILD := 3
+
 const DEFAULTS := {
 	"out_dir": "res://lightmaps/",
 	"atlas": 512,
@@ -31,7 +40,7 @@ class Target:
 
 
 ## Bake `lm`'s scene. Returns OK or an error code; messages go to the editor log.
-## `progress` (optional) is called with a status String at each stage for UI feedback.
+## `progress` (optional) is called with the current step index (see STEPS) for UI feedback.
 ## `cancelled` (optional) is a single-element Array; set cancelled[0]=true to abort the
 ## bake — the running Blender process is killed and ERR_SKIP is returned.
 static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dictionary = {}, progress := Callable(), cancelled: Array = []) -> int:
@@ -57,7 +66,7 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 	# duplicating the live scene: duplicate() chokes on CSG nodes ("child disappeared
 	# while duplicating") which silently dropped lights. This also naturally excludes
 	# hidden nodes (so no required KHR_node_visibility extension older Blenders reject).
-	_report(progress, "Exporting scene…")
+	_report(progress, STEP_EXPORT)
 	DirAccess.make_dir_recursive_absolute("user://pavlaka_tmp")
 	var glb_abs := ProjectSettings.globalize_path("user://pavlaka_tmp/scene.glb")
 	var export_root := _build_export_scene(root)
@@ -112,13 +121,12 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 	if pid <= 0:
 		push_error("pavlaka: failed to launch Blender at '%s'" % blender_path)
 		return ERR_CANT_CREATE
-	var start_ms := Time.get_ticks_msec()
+	_report(progress, STEP_RENDER)
 	while OS.is_process_running(pid):
 		if not cancelled.is_empty() and cancelled[0]:
 			OS.kill(pid)
 			print("pavlaka: bake cancelled")
 			return ERR_SKIP
-		_report(progress, "Rendering…  %ds" % ((Time.get_ticks_msec() - start_ms) / 1000))
 		await Engine.get_main_loop().process_frame
 	# surface Blender's log for diagnostics (it mirrors everything bake.py printed)
 	var log_txt := FileAccess.get_file_as_string(out_dir.path_join("bake.log"))
@@ -126,7 +134,7 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 		print("pavlaka: --- Blender log ---\n%s\npavlaka: --- end ---" % log_txt)
 
 	# 4. read bake metadata
-	_report(progress, "Importing lightmaps…")
+	_report(progress, STEP_IMPORT)
 	var meta_path := out_dir.path_join("baked.json")
 	var meta_str := FileAccess.get_file_as_string(meta_path)
 	if meta_str.is_empty():
@@ -180,6 +188,7 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 			return ERR_FILE_CANT_READ
 
 	# 6. build the LightmapGIData (Godot combines the slices into one layered atlas)
+	_report(progress, STEP_BUILD)
 	var data := LightmapGIData.new()
 	data.set_lightmap_textures(textures)
 	data.set_uses_spherical_harmonics(false)
@@ -329,9 +338,9 @@ static func _gather_into(node: Node, export_root: Node3D) -> void:
 		_gather_into(c, export_root)
 
 
-static func _report(progress: Callable, msg: String) -> void:
+static func _report(progress: Callable, step: int) -> void:
 	if progress.is_valid():
-		progress.call(msg)
+		progress.call(step)
 
 
 # map LightmapGI BakeQuality (Low/Medium/High/Ultra) to Cycles samples (denoise cleans up)

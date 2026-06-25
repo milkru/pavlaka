@@ -222,58 +222,93 @@ func _on_bake_pressed() -> void:
 	_baking = true
 	_update_button()
 
-	# progress dialog so the editor shows feedback instead of appearing frozen.
-	# NON-exclusive: an exclusive popup force-closes the editor's own reimport
-	# ProgressDialog during the import phase, corrupting its task list and crashing
-	# (progress_dialog.cpp). We also hide our dialog before the import stage so it never
-	# overlaps the editor's reimport progress.
+	# progress dialog so the editor shows feedback instead of appearing frozen. Forced
+	# NON-exclusive (AcceptDialog defaults to exclusive): an exclusive popup collides with
+	# the editor's own reimport ProgressDialog during the import step — force-closing it
+	# mid-task crashes in progress_dialog.cpp. Non-exclusive lets both coexist, so the
+	# checklist can stay visible through the whole bake (including import).
 	var cancelled := [false]
 	var dlg := AcceptDialog.new()
+	dlg.exclusive = false
 	dlg.title = "Bake with Blender"
 	dlg.get_ok_button().hide()
 	dlg.unresizable = true
-	dlg.min_size = Vector2i(420, 0)
+	dlg.min_size = Vector2i(340, 0)
 
 	var margin := MarginContainer.new()
 	for side in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
 		margin.add_theme_constant_override(side, 18)
 	var vb := VBoxContainer.new()
-	vb.add_theme_constant_override("separation", 12)
+	vb.add_theme_constant_override("separation", 14)
+
 	var heading := Label.new()
-	heading.text = "Baking lightmaps"
-	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	heading.text = "Baking lightmaps…"
 	heading.add_theme_font_size_override("font_size", 15)
+
 	var bar := ProgressBar.new()
 	bar.indeterminate = true
 	bar.editor_preview_indeterminate = true
 	bar.show_percentage = false
-	bar.custom_minimum_size = Vector2(0, 6)
-	var status := Label.new()
-	status.text = "Starting…"
-	status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	status.modulate = Color(1, 1, 1, 0.6)
+	bar.custom_minimum_size = Vector2(0, 8)
+
+	# one row per bake step, updated to ✓ done / ● current / ○ pending as the bake advances
+	var steps := VBoxContainer.new()
+	steps.add_theme_constant_override("separation", 4)
+	var step_lbls: Array[Label] = []
+	for s in PavlakaBaker.STEPS:
+		var l := Label.new()
+		l.text = "○  " + s
+		l.modulate = Color(1, 1, 1, 0.4)
+		steps.add_child(l)
+		step_lbls.append(l)
+
+	var elapsed := Label.new()
+	elapsed.modulate = Color(1, 1, 1, 0.5)
+	elapsed.text = "Elapsed: 0 s"
+
 	vb.add_child(heading)
 	vb.add_child(bar)
-	vb.add_child(status)
+	vb.add_child(steps)
+	vb.add_child(elapsed)
 	margin.add_child(vb)
 	dlg.add_child(margin)
 
+	# tick the elapsed counter once a second from when the bake started
+	var start_ms := Time.get_ticks_msec()
+	var tick := func():
+		if is_instance_valid(elapsed):
+			elapsed.text = "Elapsed: %d s" % ((Time.get_ticks_msec() - start_ms) / 1000)
+	var timer := Timer.new()
+	timer.wait_time = 1.0
+	timer.autostart = true
+	timer.timeout.connect(tick)
+	dlg.add_child(timer)
+
 	var on_cancel := func():
 		cancelled[0] = true
-		if is_instance_valid(status):
-			status.text = "Cancelling…"
+		if is_instance_valid(heading):
+			heading.text = "Cancelling…"
 	dlg.add_button("Cancel", true, "cancel").pressed.connect(on_cancel)
 	dlg.canceled.connect(on_cancel) # closing the dialog (X / Esc) also cancels the bake
 	EditorInterface.get_base_control().add_child(dlg)
 	dlg.popup_centered()
 	_set_window_icon(dlg)
-	var progress := func(msg: String):
-		if not is_instance_valid(dlg):
-			return
-		if msg.begins_with("Importing"):
-			dlg.hide() # let the editor's reimport progress dialog have the stage
-		elif is_instance_valid(status):
-			status.text = msg
+
+	# checklist: steps before `current` are done, `current` is active, the rest are pending
+	var progress := func(current: int):
+		for i in step_lbls.size():
+			var l := step_lbls[i]
+			if not is_instance_valid(l):
+				continue
+			if i < current:
+				l.text = "✓  " + PavlakaBaker.STEPS[i]
+				l.modulate = Color(1, 1, 1, 0.85)
+			elif i == current:
+				l.text = "●  " + PavlakaBaker.STEPS[i]
+				l.modulate = Color(1, 1, 1, 1.0)
+			else:
+				l.text = "○  " + PavlakaBaker.STEPS[i]
+				l.modulate = Color(1, 1, 1, 0.4)
 
 	var err: int = await PavlakaBaker.bake(root, _current, blender, _current.get_bake_opts(), progress, cancelled)
 
