@@ -21,6 +21,7 @@ var _progress_timer: Timer
 var _cancel_btn: Button
 var _cancelled: Array = [false]
 var _bake_start_ms := 0
+var _dots := 0 # animated loading dots (0..3), cycled by the progress timer
 
 
 func _enter_tree() -> void:
@@ -48,7 +49,7 @@ func _enter_tree() -> void:
 			push_warning("pavlaka: no Blender found — set Project Settings → pavlaka/blender_path")
 
 	_btn = Button.new()
-	_btn.text = "Bake with Blender"
+	_btn.text = "Bake Lightmaps"
 	_btn.pressed.connect(_on_bake_pressed)
 	# the button draws its icon at native size, so use the logo asset matching the editor's
 	# toolbar icon size (16px x editor scale): 16 at 100%, 32 at 200%, etc.
@@ -172,7 +173,7 @@ func _build_progress_strip() -> void:
 		icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		_progress.add_child(icon)
 	_progress_label = Label.new()
-	_progress_label.text = "Baking… 0 s"
+	_progress_label.text = _baking_text(0)
 	_progress_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_progress.add_child(_progress_label)
 	_cancel_btn = Button.new()
@@ -182,11 +183,19 @@ func _build_progress_strip() -> void:
 	_progress.add_child(_cancel_btn)
 	_progress.hide()
 	add_control_to_container(CONTAINER_SPATIAL_EDITOR_MENU, _progress)
-	# drives the elapsed counter once per second while baking
+	# ticks several times a second to animate the loading dots; the elapsed seconds are
+	# recomputed from real time each tick, so they stay accurate despite the faster rate
 	_progress_timer = Timer.new()
-	_progress_timer.wait_time = 1.0
+	_progress_timer.wait_time = 0.4
 	_progress_timer.timeout.connect(_tick_progress)
 	_progress.add_child(_progress_timer)
+
+
+# "Baking Lightmaps" + `dots` animated dots (padded to a fixed width so the elapsed time
+# doesn't jitter) + the elapsed time.
+func _baking_text(dots: int) -> String:
+	var pips := ".".repeat(dots).rpad(3) # e.g. "."→".  ", ".."→".. ", "..."→"..."
+	return "Baking Lightmaps%s   %s" % [pips, _fmt_elapsed((Time.get_ticks_msec() - _bake_start_ms) / 1000)]
 
 
 func _tick_progress() -> void:
@@ -194,8 +203,9 @@ func _tick_progress() -> void:
 		return
 	if not _cancelled.is_empty() and _cancelled[0]:
 		_progress_label.text = "Cancelling…"
-	else:
-		_progress_label.text = "Baking… %s" % _fmt_elapsed((Time.get_ticks_msec() - _bake_start_ms) / 1000)
+		return
+	_dots = (_dots + 1) % 4 # 0→1→2→3→0: dots appear one by one, then clear
+	_progress_label.text = _baking_text(_dots)
 
 
 func _on_cancel_pressed() -> void:
@@ -326,10 +336,11 @@ func _on_bake_pressed() -> void:
 	_baking = true
 	_cancelled = [false]
 	_bake_start_ms = Time.get_ticks_msec()
+	_dots = 0
 	if _cancel_btn:
 		_cancel_btn.disabled = false
 	if _progress_label:
-		_progress_label.text = "Baking… 0 s"
+		_progress_label.text = _baking_text(0)
 	_update_button()
 	if _progress_timer:
 		_progress_timer.start()
