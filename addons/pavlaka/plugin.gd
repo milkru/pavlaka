@@ -51,8 +51,11 @@ func _enter_tree() -> void:
 	_btn.text = "Bake with Blender"
 	_btn.pressed.connect(_on_bake_pressed)
 	var theme := EditorInterface.get_editor_theme()
-	if theme != null and theme.has_icon("Bake", "EditorIcons"):
-		_btn.icon = theme.get_icon("Bake", "EditorIcons") # match the built-in bake button
+	var blender_icon := _make_toolbar_icon(theme)
+	if blender_icon != null:
+		_btn.icon = blender_icon
+	elif theme != null and theme.has_icon("Bake", "EditorIcons"):
+		_btn.icon = theme.get_icon("Bake", "EditorIcons") # fallback to the built-in bake icon
 	_btn.hide() # shown only while a LightmapBlenderGI is selected
 	add_control_to_container(CONTAINER_SPATIAL_EDITOR_MENU, _btn)
 	_build_progress_strip()
@@ -120,6 +123,29 @@ func _update_button() -> void:
 	var path_ok := not path.is_empty() and FileAccess.file_exists(path)
 	_btn.disabled = not path_ok
 	_btn.tooltip_text = "" if path_ok else "Set the Blender path in Project Settings → pavlaka/blender_path"
+
+
+# The Blender logo sized for a toolbar button. A Button draws its icon at native size, so
+# we downscale the 64px source to match the editor's other toolbar icons (the "Bake" icon's
+# size, which already accounts for the editor scale / DPI). Returns null if unavailable.
+func _make_toolbar_icon(theme: Theme) -> Texture2D:
+	var icon_path := (get_script() as Script).resource_path.get_base_dir().path_join("blender_icon.png")
+	if not ResourceLoader.exists(icon_path):
+		return null
+	var tex := load(icon_path) as Texture2D
+	if tex == null:
+		return null
+	var img := tex.get_image()
+	if img == null:
+		return null
+	img = img.duplicate()
+	img.convert(Image.FORMAT_RGBA8)
+	var target := int(16.0 * EditorInterface.get_editor_scale())
+	if theme != null and theme.has_icon("Bake", "EditorIcons"):
+		target = int(theme.get_icon("Bake", "EditorIcons").get_size().y)
+	if target > 0 and (img.get_width() != target or img.get_height() != target):
+		img.resize(target, target, Image.INTERPOLATE_LANCZOS)
+	return ImageTexture.create_from_image(img)
 
 
 # build the inline progress strip ([logo] Baking… Ns [Cancel]); hidden until a bake starts
