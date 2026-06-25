@@ -107,6 +107,9 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 	# final packed atlas + .lmbake go to the per-scene output folder (mirrors the scene's
 	# path under the base dir, so same-named scenes in different folders never collide).
 	var out_dir := _scene_bake_dir(root, cfg["out_dir"])
+	# if the output folder is brand new, the EditorFileSystem doesn't know it yet, so we must
+	# scan (not reimport_files) to import the pages — tracked below to pick the right path.
+	var dir_was_new := not DirAccess.dir_exists_absolute(out_dir)
 	DirAccess.make_dir_recursive_absolute(out_dir)
 	var lights: Array = []
 	_collect_lights(root, lights)
@@ -193,13 +196,17 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 		_write_exr_import(pp)
 		efs.update_file(pp)
 		page_paths.append(pp)
-	# update_file registers each page, so reimport_files imports them synchronously. This is
-	# reliable whether the page is new or a re-bake — unlike relying on a scan's timing, which
-	# fails to import a new page when another lightmap already exists in the folder.
-	efs.reimport_files(page_paths)
-	var page_texes := _load_pages(page_paths)
+	var page_texes: Array = []
+	# In an already-tracked folder, update_file + reimport_files imports the pages
+	# synchronously — reliable whether new or re-baked (and, unlike a scan, it works even when
+	# another lightmap already exists in the folder). A brand-new folder isn't known to the
+	# EditorFileSystem yet, so reimport_files would error there; scan instead (below).
+	if not dir_was_new:
+		efs.reimport_files(page_paths)
+		page_texes = _load_pages(page_paths)
 	if page_texes.is_empty():
-		# last resort: a full rescan (e.g. the output folder itself is unknown), then retry
+		# brand-new (or still-unknown) folder: rescan so the EditorFileSystem discovers and
+		# imports the pages, then load.
 		var scanned := [false]
 		var on_changed := func(): scanned[0] = true
 		efs.filesystem_changed.connect(on_changed)
@@ -210,7 +217,6 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 			frames += 1
 		if efs.filesystem_changed.is_connected(on_changed):
 			efs.filesystem_changed.disconnect(on_changed)
-		efs.reimport_files(page_paths)
 		page_texes = _load_pages(page_paths)
 		if page_texes.is_empty():
 			push_error("pavlaka: failed to import baked lightmap pages (see Output)")
