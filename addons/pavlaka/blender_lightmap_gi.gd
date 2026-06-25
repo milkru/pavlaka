@@ -26,10 +26,15 @@ extends LightmapGI
 # Sky, 3 Custom Color.
 
 @export_group("Blender Bake")
-## Compress the baked lightmap textures (VRAM compression, ~4x smaller GPU memory). When OFF
-## (default), pages are lossless and kept at their exact content-fit size. When ON, textures
-## are rounded up to a power of two (some wasted space, and a page may exceed Max Texture Size),
-## and HDR compression (BC6H) can introduce slight banding — but uses far less VRAM.
+## Compress the baked lightmap textures to save GPU memory.
+##
+## Off (default): lossless. Each atlas page keeps its exact content fit size and never
+## exceeds Max Texture Size. Best quality and no wasted space, but the most VRAM.
+##
+## On: GPU texture compression (BC6H), roughly 4x less VRAM. Costs: each page is rounded up
+## to a power of two, so some atlas space is wasted and a page can end up larger than Max
+## Texture Size; and the HDR compression can introduce slight color banding on smooth
+## gradients. Prefer this only when lightmap VRAM is a real concern.
 @export var compress_lightmaps: bool = false
 
 @export_group("Lights")
