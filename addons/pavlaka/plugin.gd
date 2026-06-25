@@ -339,7 +339,7 @@ func _on_bake_pressed() -> void:
 	if _progress_timer:
 		_progress_timer.start()
 
-	await PavlakaBaker.bake(root, _current, blender, _current.get_bake_opts(), Callable(), _cancelled)
+	await PavlakaBaker.bake(root, _current, blender, _current.get_bake_opts(), _cancelled)
 
 	if _progress_timer:
 		_progress_timer.stop()

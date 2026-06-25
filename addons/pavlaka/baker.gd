@@ -31,10 +31,9 @@ class Target:
 
 
 ## Bake `lm`'s scene. Returns OK or an error code; messages go to the editor log.
-## `progress` (optional) is called with a status String at each stage for UI feedback.
 ## `cancelled` (optional) is a single-element Array; set cancelled[0]=true to abort the
 ## bake — the running Blender process is killed and ERR_SKIP is returned.
-static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dictionary = {}, progress := Callable(), cancelled: Array = []) -> int:
+static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dictionary = {}, cancelled: Array = []) -> int:
 	var cfg := DEFAULTS.duplicate()
 	for k in opts:
 		cfg[k] = opts[k]
@@ -59,7 +58,6 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 	# duplicating the live scene: duplicate() chokes on CSG nodes ("child disappeared
 	# while duplicating") which silently dropped lights. This also naturally excludes
 	# hidden nodes (so no required KHR_node_visibility extension older Blenders reject).
-	_report(progress, "Exporting scene…")
 	DirAccess.make_dir_recursive_absolute("user://pavlaka_tmp")
 	var glb_abs := ProjectSettings.globalize_path("user://pavlaka_tmp/scene.glb")
 	var export_root := _build_export_scene(root)
@@ -114,18 +112,15 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 	if pid <= 0:
 		push_error("pavlaka: failed to launch Blender at '%s'" % blender_path)
 		return ERR_CANT_CREATE
-	var start_ms := Time.get_ticks_msec()
 	while OS.is_process_running(pid):
 		if not cancelled.is_empty() and cancelled[0]:
 			OS.kill(pid)
 			print("pavlaka: bake cancelled")
 			return ERR_SKIP
-		_report(progress, "Rendering…  %ds" % ((Time.get_ticks_msec() - start_ms) / 1000))
 		await Engine.get_main_loop().process_frame
 
 	# 4. read bake metadata. Blender's full log is kept in bake.log; we only echo it to the
 	# Godot console when something actually went wrong (otherwise it's just noise).
-	_report(progress, "Importing lightmaps…")
 	var meta_path := out_dir.path_join("baked.json")
 	var meta_str := FileAccess.get_file_as_string(meta_path)
 	if meta_str.is_empty():
@@ -338,11 +333,6 @@ static func _gather_into(node: Node, export_root: Node3D) -> void:
 			export_root.add_child(lcopy)
 			lcopy.owner = export_root
 		_gather_into(c, export_root)
-
-
-static func _report(progress: Callable, msg: String) -> void:
-	if progress.is_valid():
-		progress.call(msg)
 
 
 # map LightmapGI BakeQuality (Low/Medium/High/Ultra) to Cycles samples (denoise cleans up)
