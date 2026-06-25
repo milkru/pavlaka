@@ -72,12 +72,14 @@ func _apply_baked_bounds() -> void:
 var _inherited_props: Dictionary = {}
 
 
-# LightmapGI's Environment properties are kept visible (it's the section we DO want);
-# its own _validate_property still hides the custom sky/color by mode.
+# Inherited LightmapGI properties we keep visible: the Environment section (it's the one we
+# reuse), the Quality dropdown, and the Data > Light Data slot (the baked .lmbake, shown like
+# native so it can be inspected/cleared). "Data" is the group header for light_data.
 const _KEEP_VISIBLE := {
 	"quality": true,
 	"environment_mode": true, "environment_custom_sky": true,
 	"environment_custom_color": true, "environment_custom_energy": true,
+	"Data": true, "light_data": true,
 }
 
 
