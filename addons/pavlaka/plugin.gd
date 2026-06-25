@@ -339,12 +339,10 @@ func _on_bake_pressed() -> void:
 	if _progress_timer:
 		_progress_timer.start()
 
-	var err: int = await PavlakaBaker.bake(root, _current, blender, _current.get_bake_opts(), Callable(), _cancelled)
+	await PavlakaBaker.bake(root, _current, blender, _current.get_bake_opts(), Callable(), _cancelled)
 
 	if _progress_timer:
 		_progress_timer.stop()
-	if err == OK:
-		EditorInterface.mark_scene_as_unsaved()
 	_baking = false
 	_update_button()
 
