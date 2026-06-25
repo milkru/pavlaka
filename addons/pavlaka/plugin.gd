@@ -352,12 +352,23 @@ func _on_bake_pressed() -> void:
 	if _progress_timer:
 		_progress_timer.start()
 
-	await PavlakaBaker.bake(root, _current, blender, save_path, _current.get_bake_opts(), _cancelled)
+	# remember the node's prior light_data path so we can tell if the bake actually changes
+	# the scene (first bake / different save path) and only then mark it unsaved
+	var prev_data: LightmapGIData = _current.light_data
+	var prev_path := prev_data.resource_path if prev_data != null else ""
+
+	var err: int = await PavlakaBaker.bake(root, _current, blender, save_path, _current.get_bake_opts(), _cancelled)
 
 	if _progress_timer:
 		_progress_timer.stop()
 	_baking = false
 	_update_button()
+
+	# Mark the scene unsaved only when the assignment changed the scene (the node now points
+	# at a different .lmbake), so a first bake isn't lost on reload. A re-bake reusing the
+	# same path leaves the .tscn unchanged, so it stays clean (no spurious '*').
+	if err == OK and _current.light_data != null and _current.light_data.resource_path != prev_path:
+		EditorInterface.mark_scene_as_unsaved()
 
 
 # Default .lmbake path: next to the scene, named after it (matches native LightmapGI).
