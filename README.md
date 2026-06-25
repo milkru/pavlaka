@@ -77,12 +77,9 @@ controlled by the parameters above.
   Static `DirectionalLight3D`, not the sky).
 - **One slice per mesh.** There is no space efficient atlas packing yet, and every mesh
   gets a full resolution slice regardless of size (Texture2DArray layers share dimensions).
-- **Only works in the normal Godot editor, not headless.** The bake uses the editor's
-  filesystem to import the baked textures, so it can't run in headless mode (Godot launched
-  with no editor window, e.g. from a command line or CI build server).
-- **The editor must be in English.** When the node is selected the plugin hides Godot's
-  built-in "Bake Lightmaps" button by matching that text. In a non-English editor the text
-  is translated, so the built-in button won't be found and you'll see both buttons.
+- **Editor only, like the native bake.** Baking runs from the editor (it uses the editor
+  filesystem to import the result), so it isn't a headless operation. Godot's own
+  "Bake Lightmaps" works the same way.
 
 See **[RESEARCH.md](RESEARCH.md)** for the design, the Godot 4.7 source findings, the
 data contract, and the pitfalls discovered while building this.

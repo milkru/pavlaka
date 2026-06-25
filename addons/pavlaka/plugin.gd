@@ -108,11 +108,20 @@ func _find_builtin_bake_button() -> Button:
 	if _btn == null or _btn.get_parent() == null:
 		return null
 	for c in _btn.get_parent().get_children():
-		if c != _btn and c is Button and "Bake Lightmap" in (c as Button).text:
-			_builtin_btn = c
-			if not _builtin_btn.visibility_changed.is_connected(_on_builtin_vis):
-				_builtin_btn.visibility_changed.connect(_on_builtin_vis)
-			return _builtin_btn
+		if c == _btn or not (c is Button):
+			continue
+		# Identify Godot's built-in bake button by its signal wiring, not its label:
+		# LightmapGIEditorPlugin connects the button's "pressed" signal to its own _bake().
+		# Matching the object's class is language-independent (the "Bake Lightmaps" text is
+		# translated in non-English editors).
+		for conn in (c as Button).pressed.get_connections():
+			var cb: Callable = conn["callable"]
+			var obj: Object = cb.get_object()
+			if obj != null and obj.get_class() == "LightmapGIEditorPlugin":
+				_builtin_btn = c
+				if not _builtin_btn.visibility_changed.is_connected(_on_builtin_vis):
+					_builtin_btn.visibility_changed.connect(_on_builtin_vis)
+				return _builtin_btn
 	return null
 
 
