@@ -1,4 +1,5 @@
 @tool
+@icon("res://addons/pavlaka/blender-icon.svg")
 class_name BlenderLightmapGI
 extends LightmapGI
 ## A LightmapGI whose lighting is baked externally by Blender (Cycles) via the pavlaka
