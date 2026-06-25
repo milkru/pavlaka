@@ -12,9 +12,12 @@ extends RefCounted
 # so the plugin is self-contained: copying addons/pavlaka/ into any project is enough.
 const BAKE_SCRIPT := "res://addons/pavlaka/bake.py"
 
+# texels per world unit at texel_scale = 1.0 — chunk side px = sqrt(area) * this * texel_scale
+const BASE_DENSITY := 10.0
+
 const DEFAULTS := {
 	"page_size": 1024,
-	"texel_size": 0.1,
+	"texel_scale": 1.0, # LightmapGI's density multiplier (higher = sharper / more texels)
 	"quality": 1, # LightmapGI BakeQuality: 0 Low, 1 Medium, 2 High, 3 Ultra
 	"light_energy_scale": 1.0,
 	"environment_mode": 1, # SCENE
@@ -58,18 +61,18 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 	# area at the chosen texel density, shelf-packed into page_size² pages (see _pack_pages).
 	# Done before baking so each mesh can be baked at its exact chunk size.
 	var page_size := int(cfg["page_size"])
-	var pack := _pack_pages(targets, page_size, float(cfg["texel_size"]))
+	var pack := _pack_pages(targets, page_size, float(cfg["texel_scale"]))
 	var n_pages: int = pack["pages"]
 	var placements: Array = pack["placements"] # {page, rect}, aligned with `targets`
 	if n_pages == 0:
 		push_error("pavlaka: targets have zero surface area; nothing to bake")
 		return ERR_INVALID_DATA
 	for nm in pack["fallbacks"]:
-		push_warning(("pavlaka: mesh '%s' is too large to fit a %dpx page at texel_size %.3f; "
+		push_warning(("pavlaka: mesh '%s' is too large to fit a %dpx page at texel_scale %.3f; "
 			+ "its lightmap was shrunk to fit (lower density there). Split the mesh, increase "
-			+ "page_size, or raise texel_size.") % [nm, page_size, float(cfg["texel_size"])])
+			+ "page_size, or lower texel_scale.") % [nm, page_size, float(cfg["texel_scale"])])
 	if n_pages > 8:
-		push_warning("pavlaka: bake uses %d atlas pages — raise texel_size for fewer/lower-res pages if VRAM is a concern" % n_pages)
+		push_warning("pavlaka: bake uses %d atlas pages — lower texel_scale for fewer/lower-res pages if VRAM is a concern" % n_pages)
 	var place_by_name := {}
 	var size_by_name := {}
 	for i in targets.size():
@@ -230,7 +233,7 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 	var bounds := _world_aabb(targets)
 	# Keep probe points EMPTY so no probe gizmo is drawn. set_capture_data then forces the
 	# RenderingServer bounds to empty, so we re-apply real bounds directly below (and the
-	# LightmapBlenderGI re-applies them on load) — otherwise the instance is culled.
+	# BlenderLightmapGI re-applies them on load) — otherwise the instance is culled.
 	data.call("_set_probe_data", {
 		"bounds": bounds,
 		"points": PackedVector3Array(),
@@ -267,8 +270,8 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 	# Apply the real bounds to the RenderingServer now (this session) and store them on
 	# the node so they're re-applied on load — without any probe point (hence no gizmo).
 	RenderingServer.lightmap_set_probe_bounds(data.get_rid(), bounds)
-	if lm is LightmapBlenderGI:
-		(lm as LightmapBlenderGI).baked_bounds = bounds
+	if lm is BlenderLightmapGI:
+		(lm as BlenderLightmapGI).baked_bounds = bounds
 	# drop pages left by a denser previous bake. Done last, after the new pages are imported —
 	# deleting tracked files mid-import corrupts the EditorFileSystem scan and they fail.
 	_cleanup_stale_pages(out_dir, base_name, n_pages)
@@ -469,18 +472,18 @@ static func _world_surface_area(mi: MeshInstance3D) -> float:
 
 
 # Pack the targets into fixed-size atlas pages at a uniform texel density (no stretching).
-# Each mesh's square chunk side = sqrt(world area) / texel_size (px); chunks are shelf-packed
-# into page_size² pages, opening new pages as needed (multi-page like the native lightmapper).
-# A mesh whose chunk can't fit one page is shrunk to fit and its name returned in "fallbacks".
-# Returns { "pages": int, "placements": Array ({page:int, rect:Rect2i}, aligned with targets),
-# "fallbacks": Array[String] }.
-static func _pack_pages(targets: Array[Target], page_size: int, texel_size: float) -> Dictionary:
+# Each mesh's square chunk side = sqrt(world area) * BASE_DENSITY * texel_scale (px); chunks
+# are shelf-packed into page_size² pages, opening new pages as needed (multi-page like the
+# native lightmapper). A mesh whose chunk can't fit one page is shrunk to fit and its name
+# returned in "fallbacks". Returns { "pages": int, "placements": Array ({page:int, rect:Rect2i},
+# aligned with targets), "fallbacks": Array[String] }.
+static func _pack_pages(targets: Array[Target], page_size: int, texel_scale: float) -> Dictionary:
 	var inner := maxi(1, page_size - ATLAS_GUTTER) # leave a gutter so nothing touches the edge
-	var ts: float = texel_size if texel_size > 0.0001 else 0.1
+	var density: float = BASE_DENSITY * (texel_scale if texel_scale > 0.0001 else 1.0)
 	var sizes: Array[int] = []
 	var fallbacks: Array[String] = []
 	for t in targets:
-		var s := int(maxi(8, roundi(sqrt(_world_surface_area(t.node)) / ts)))
+		var s := int(maxi(8, roundi(sqrt(_world_surface_area(t.node)) * density)))
 		if s > inner:
 			s = inner # too big for a page: shrink to fit (lower density) instead of erroring
 			fallbacks.append(t.name)

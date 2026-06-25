@@ -1,5 +1,5 @@
 @tool
-class_name LightmapBlenderGI
+class_name BlenderLightmapGI
 extends LightmapGI
 ## A LightmapGI whose lighting is baked externally by Blender (Cycles) via the pavlaka
 ## plugin, then assigned back as native LightmapGIData.
@@ -14,10 +14,10 @@ extends LightmapGI
 ## (multi-page, like the native lightmapper). A mesh whose chunk can't fit one page is
 ## shrunk to fit and a warning is logged.
 @export var page_size: int = 1024
-## World units per texel (smaller = sharper, more texels). Each mesh's lightmap chunk is
-## sized sqrt(world surface area) / texel_size, so texel density is uniform across the
-## scene — no stretching. Tune to your scene's scale.
-@export var texel_size: float = 0.1
+# Texel density is controlled by LightmapGI's own inherited "texel_scale" property (kept
+# visible via _validate_property): each mesh's lightmap chunk is sized
+# sqrt(world surface area) * BASE_DENSITY * texel_scale, so density is uniform across the
+# scene (no stretching). Higher texel_scale = sharper / more texels / more pages.
 # Quality (Low/Medium/High/Ultra) reuses LightmapGI's own inherited "quality" property and
 # maps to Cycles samples in the baker (see _validate_property / get_bake_opts).
 
@@ -35,7 +35,7 @@ extends LightmapGI
 func get_bake_opts() -> Dictionary:
 	return {
 		"page_size": page_size,
-		"texel_size": texel_size,
+		"texel_scale": texel_scale, # inherited LightmapGI property; density multiplier
 		"quality": quality, # inherited LightmapGI property; mapped to samples in the baker
 		"light_energy_scale": light_energy_scale,
 		# these are LightmapGI's own inherited Environment properties
@@ -73,7 +73,7 @@ var _inherited_props: Dictionary = {}
 # reuse), the Quality dropdown, and the Data > Light Data slot (the baked .lmbake, shown like
 # native so it can be inspected/cleared). "Data" is the group header for light_data.
 const _KEEP_VISIBLE := {
-	"quality": true,
+	"quality": true, "texel_scale": true,
 	"environment_mode": true, "environment_custom_sky": true,
 	"environment_custom_color": true, "environment_custom_energy": true,
 	"Data": true, "light_data": true,

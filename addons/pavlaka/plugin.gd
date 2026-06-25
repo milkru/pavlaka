@@ -1,7 +1,7 @@
 @tool
 extends EditorPlugin
 ## pavlaka EditorPlugin. Mirrors the built-in LightmapGI workflow: when a
-## LightmapBlenderGI node is selected, a "Bake with Blender" button appears in the 3D
+## BlenderLightmapGI node is selected, a "Bake with Blender" button appears in the 3D
 ## editor toolbar and bakes that node's scene using the node's parameters.
 ##
 ## Blender path resolves from project setting "pavlaka/blender_path", else env
@@ -12,7 +12,7 @@ const SETTING_BLENDER := "pavlaka/blender_path"
 
 var _btn: Button
 var _builtin_btn: Button
-var _current: LightmapBlenderGI
+var _current: BlenderLightmapGI
 var _baking := false
 # inline progress strip shown in the toolbar in place of the bake button while baking
 var _progress: HBoxContainer
@@ -60,7 +60,7 @@ func _enter_tree() -> void:
 		var theme := EditorInterface.get_editor_theme()
 		if theme != null and theme.has_icon("Bake", "EditorIcons"):
 			_btn.icon = theme.get_icon("Bake", "EditorIcons") # fallback to the built-in bake icon
-	_btn.hide() # shown only while a LightmapBlenderGI is selected
+	_btn.hide() # shown only while a BlenderLightmapGI is selected
 	add_control_to_container(CONTAINER_SPATIAL_EDITOR_MENU, _btn)
 	_build_progress_strip()
 
@@ -92,15 +92,15 @@ func _exit_tree() -> void:
 		_progress = null
 
 
-# show the bake button only while a LightmapBlenderGI node is selected
+# show the bake button only while a BlenderLightmapGI node is selected
 func _on_selection_changed() -> void:
 	_current = null
 	for n in EditorInterface.get_selection().get_selected_nodes():
-		if n is LightmapBlenderGI:
+		if n is BlenderLightmapGI:
 			_current = n
 			break
 	_update_button()
-	# LightmapBlenderGI is-a LightmapGI, so Godot's built-in editor plugin also shows its
+	# BlenderLightmapGI is-a LightmapGI, so Godot's built-in editor plugin also shows its
 	# "Bake Lightmaps" button. Hide it while our node is selected (and re-hide if the
 	# built-in plugin pops it back up — see _on_builtin_vis). Plain LightmapGI nodes are
 	# unaffected (then _current is null and we leave the built-in button alone).
@@ -111,7 +111,7 @@ func _on_selection_changed() -> void:
 
 # single source of truth for the toolbar slot. While baking, the progress strip replaces
 # the button and stays visible regardless of selection. Otherwise the button shows only
-# with a LightmapBlenderGI selected, disabled when the Blender path is unset/invalid.
+# with a BlenderLightmapGI selected, disabled when the Blender path is unset/invalid.
 func _update_button() -> void:
 	if _btn == null:
 		return
@@ -309,7 +309,7 @@ func _on_bake_pressed() -> void:
 	if _baking:
 		return # re-entry guard: a bake is already running
 	if _current == null:
-		push_error("pavlaka: select a LightmapBlenderGI node first")
+		push_error("pavlaka: select a BlenderLightmapGI node first")
 		return
 	var root := EditorInterface.get_edited_scene_root()
 	if root == null or not (root is Node3D):
@@ -443,7 +443,7 @@ func _autobake() -> void:
 	we.environment = env
 	root.add_child(we); we.owner = root
 
-	var lm := LightmapBlenderGI.new(); lm.name = "LightmapBlenderGI"
+	var lm := BlenderLightmapGI.new(); lm.name = "BlenderLightmapGI"
 	root.add_child(lm); lm.owner = root
 
 	var err: int = await PavlakaBaker.bake(root, lm, _blender_path(), "res://lightmaps/BakeScene/BakeScene.lmbake", lm.get_bake_opts())

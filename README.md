@@ -1,7 +1,7 @@
 # pavlaka
 
 Bake Godot lightmaps externally in **Blender (Cycles)** and import them back as native
-**`LightmapGIData`**. A Godot editor plugin that adds a `LightmapBlenderGI` node with a
+**`LightmapGIData`**. A Godot editor plugin that adds a `BlenderLightmapGI` node with a
 "Bake with Blender" button, mirroring the built-in `LightmapGI` workflow.
 
 Targets **Godot 4.7**. Engine internals are version specific, so long term compatibility
@@ -11,7 +11,7 @@ is not a goal. The Blender side uses the long stable bake API and works on **Ble
 ## How it works
 
 ```
-LightmapBlenderGI node + "Bake Lightmaps"
+BlenderLightmapGI node + "Bake Lightmaps"
   -> pack each mesh into atlas pages, sized by its world-space surface area
   -> export the scene's static meshes + lights to a temp glTF
   -> run Blender headless: Cycles bakes IRRADIANCE per mesh (Diffuse, Direct+Indirect,
@@ -41,24 +41,24 @@ Godot owns the UV2; Blender bakes into it. Meshes are packed into one or more at
 
 ## Usage
 
-1. Add a **`LightmapBlenderGI`** node to your scene (Create Node dialog).
+1. Add a **`BlenderLightmapGI`** node to your scene (Create Node dialog).
 2. Make sure your static meshes have **UV2**. For imported meshes: Import dock →
    **Meshes → Light Baking = "Static Lightmaps"** → Reimport (Godot generates UV2 and
    marks them static). Meshes without UV2 are skipped.
 3. Add at least one light and set its **Bake Mode = Static** (only Static lights are
    baked), or rely on the Environment (scene sky or Custom Color) for an ambient occlusion
    bake.
-4. Select the `LightmapBlenderGI` and press **Bake with Blender** in the 3D toolbar.
+4. Select the `BlenderLightmapGI` and press **Bake with Blender** in the 3D toolbar.
    A progress dialog shows the stages; **Cancel** aborts the running bake.
 5. After baking, **disable or hide the real time lights** you baked, otherwise they
    double light the static geometry and wash out the baked result. (Or keep them as fill.)
 
-### Node parameters (`LightmapBlenderGI`)
+### Node parameters (`BlenderLightmapGI`)
 
 | Group | Property | Meaning |
 |---|---|---|
 | Blender Bake | `page_size` | Size (px) of each square atlas page. Meshes are packed across as many pages as needed (multi-page, like the native lightmapper). A mesh whose chunk can't fit one page is shrunk to fit and a warning is logged. |
-| Blender Bake | `texel_size` | World units per texel. Each mesh's lightmap chunk is sized `sqrt(world surface area) / texel_size`, so texel density is uniform across the scene (no stretching). Smaller = sharper / more texels / more pages. Tune to your scene's scale. |
+| Tweaks | `Texel Scale` | LightmapGI's own density multiplier. Each mesh's lightmap chunk is sized `sqrt(world surface area) × 10 × texel_scale`, so density is uniform across the scene (no stretching). Higher = sharper / more texels / more pages. Tune to your scene's scale. |
 | Tweaks | `Quality` | LightmapGI's own Quality dropdown (Low/Medium/High/Ultra), mapped to Cycles samples (64/128/256/512; denoised afterward). |
 | Environment | `Mode` | LightmapGI's own Environment Mode, used for the bake's ambient and sky: **Disabled** (none), **Scene** (bake the scene's `WorldEnvironment` sky to a panorama), **Custom Sky** (bake a given `Sky`), **Custom Color** (flat color). |
 | Environment | `Custom Sky` / `Custom Color` / `Custom Energy` | Used by the Custom Sky and Custom Color modes (energy scales either). |
@@ -80,7 +80,7 @@ controlled by the parameters above.
 - **Very large meshes get shrunk, not split.** A mesh whose lightmap chunk can't fit one
   `page_size` page is scaled down to fit (lower density there) and a warning names it.
   Unlike the native lightmapper this never aborts the bake, but for best quality split the
-  mesh, raise `page_size`, or raise `texel_size`.
+  mesh, raise `page_size`, or lower `Texel Scale`.
 
 See **[RESEARCH.md](RESEARCH.md)** for the design, the Godot 4.7 source findings, the
 data contract, and the pitfalls discovered while building this.

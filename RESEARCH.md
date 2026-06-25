@@ -6,7 +6,7 @@
 plugin lives in `addons/pavlaka/`. This document is the design record and source-grounded
 findings; the milestone notes further down (M0–M2c) trace how it was validated.
 
-Shipped: a `LightmapBlenderGI` node (extends `LightmapGI`) with a selection-driven "Bake
+Shipped: a `BlenderLightmapGI` node (extends `LightmapGI`) with a selection-driven "Bake
 with Blender" button; per-mesh irradiance bake in headless Blender (Diffuse / Direct+
 Indirect / Color OFF, OIDN-denoised) → per-mesh EXR slices → `CompressedTexture2DArray`
 → a combined `LightmapGIData` saved as `.lmbake` and assigned to the node. Non-blocking
@@ -19,7 +19,7 @@ bake with a progress dialog + Cancel.
   (renders unlit). Rather than store a dummy probe point (which draws a probe gizmo), we
   keep points empty and re-apply the real bounds directly via
   `RenderingServer.lightmap_set_probe_bounds()` — right after baking, and again on load
-  via `LightmapBlenderGI` (it stores `baked_bounds` and re-applies on ENTER_TREE).
+  via `BlenderLightmapGI` (it stores `baked_bounds` and re-applies on ENTER_TREE).
 - **Hidden nodes + `KHR_node_visibility`** — Godot 4.7 emits this *required* glTF
   extension for hidden nodes; Blender < 5.2 rejects the file. We export a reconstructed
   scene of visible meshes/lights only.
