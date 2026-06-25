@@ -118,7 +118,7 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 			OS.kill(pid)
 			print("pavlaka: bake cancelled")
 			return ERR_SKIP
-		_report(progress, "Baking in Blender…  %ds" % ((Time.get_ticks_msec() - start_ms) / 1000))
+		_report(progress, "Rendering…  %ds" % ((Time.get_ticks_msec() - start_ms) / 1000))
 		await Engine.get_main_loop().process_frame
 	# surface Blender's log for diagnostics (it mirrors everything bake.py printed)
 	var log_txt := FileAccess.get_file_as_string(out_dir.path_join("bake.log"))

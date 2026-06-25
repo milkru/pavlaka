@@ -224,7 +224,7 @@ func _on_bake_pressed() -> void:
 	var vb := VBoxContainer.new()
 	vb.add_theme_constant_override("separation", 12)
 	var heading := Label.new()
-	heading.text = "Baking lightmaps with Blender"
+	heading.text = "Baking lightmaps"
 	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	heading.add_theme_font_size_override("font_size", 15)
 	var bar := ProgressBar.new()
