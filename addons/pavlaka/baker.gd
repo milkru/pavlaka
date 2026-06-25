@@ -53,13 +53,30 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 	print("pavlaka: %d lightmap target(s): %s" % [targets.size(),
 		targets.map(func(t): return t.name)])
 
-	# 2. export the scene (geometry + lights) to a temp glb for Blender.
+	# 2. pack the atlas: each mesh gets a chunk of the single lightmap sized by its
+	# world-space surface area; the packed sheet is scaled to lightmap_size (see
+	# _pack_atlas). Done before baking so each mesh can be baked at its exact chunk size.
+	var pack := _pack_atlas(targets, int(cfg["lightmap_size"]))
+	if pack.is_empty():
+		push_error("pavlaka: targets have zero surface area; nothing to bake")
+		return ERR_INVALID_DATA
+	var atlas_dim: Vector2i = pack["atlas"]
+	var rects: Array = pack["rects"] # Array[Rect2i], aligned with `targets`
+	var rect_by_name := {}
+	var size_by_name := {}
+	for i in targets.size():
+		rect_by_name[targets[i].name] = rects[i]
+		size_by_name[targets[i].name] = (rects[i] as Rect2i).size.x # chunks are square
+
+	# 3. export the scene (geometry + lights) to a temp glb for Blender.
 	# Build a fresh export tree (copied meshes + lights, in world space) instead of
 	# duplicating the live scene: duplicate() chokes on CSG nodes ("child disappeared
 	# while duplicating") which silently dropped lights. This also naturally excludes
 	# hidden nodes (so no required KHR_node_visibility extension older Blenders reject).
-	DirAccess.make_dir_recursive_absolute("user://pavlaka_tmp")
-	var glb_abs := ProjectSettings.globalize_path("user://pavlaka_tmp/scene.glb")
+	var work := "user://pavlaka_tmp"
+	DirAccess.make_dir_recursive_absolute(work)
+	var work_abs := ProjectSettings.globalize_path(work)
+	var glb_abs := work_abs.path_join("scene.glb")
 	var export_root := _build_export_scene(root)
 	var n_lights := 0
 	for c in export_root.get_children():
@@ -77,18 +94,17 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 		push_error("pavlaka: glTF export failed (%d)" % err)
 		return err
 
-	# 3. run Blender headless to bake.
-	# Per-scene output folder that mirrors the scene's path under the base dir, so two
-	# scenes with the same name in different folders never collide.
+	# 4. run Blender headless: bake each mesh into its own EXR at its chunk size.
+	# Intermediates (per-mesh EXRs + baked.json + bake.log) go to the temp work dir; the
+	# final packed atlas + .lmbake go to the per-scene output folder (mirrors the scene's
+	# path under the base dir, so same-named scenes in different folders never collide).
 	var out_dir := _scene_bake_dir(root, cfg["out_dir"])
 	DirAccess.make_dir_recursive_absolute(out_dir)
-	# write bake parameters (incl. each Static light's actual energy + linear color) to a
-	# JSON the bake script reads, instead of a long positional arg list
 	var lights: Array = []
 	_collect_lights(root, lights)
 	var env := _resolve_environment(root, cfg)
 	var params := {
-		"atlas": cfg["atlas"],
+		"sizes": size_by_name, # per-mesh square chunk size in px
 		"samples": _samples_for_quality(int(cfg["quality"])),
 		"light_energy_scale": cfg["light_energy_scale"],
 		"lights": lights,
@@ -96,17 +112,16 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 		"ambient_color": env["ambient_color"],
 		"ambient_energy": env["ambient_energy"],
 	}
-	var params_path := "user://pavlaka_tmp/params.json"
+	var params_path := work + "/params.json"
 	var pf := FileAccess.open(params_path, FileAccess.WRITE)
 	pf.store_string(JSON.stringify(params))
 	pf.close()
 	var args := PackedStringArray([
 		"--background", "--python", ProjectSettings.globalize_path(BAKE_SCRIPT), "--",
-		glb_abs, ProjectSettings.globalize_path(out_dir), ProjectSettings.globalize_path(params_path),
+		glb_abs, work_abs, ProjectSettings.globalize_path(params_path),
 	])
-	# Run Blender non-blocking and poll, so the editor stays responsive (and we can show
-	# progress) instead of freezing. Output is captured via bake.log (create_process
-	# can't read stdout). Wait one frame between polls to yield to the editor.
+	# Run Blender non-blocking and poll, so the editor stays responsive instead of freezing.
+	# Output is captured via bake.log (create_process can't read stdout); yield each frame.
 	print("pavlaka: running Blender...")
 	var pid := OS.create_process(blender_path, args)
 	if pid <= 0:
@@ -119,49 +134,56 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 			return ERR_SKIP
 		await Engine.get_main_loop().process_frame
 
-	# 4. read bake metadata. Blender's full log is kept in bake.log; we only echo it to the
-	# Godot console when something actually went wrong (otherwise it's just noise).
-	var meta_path := out_dir.path_join("baked.json")
-	var meta_str := FileAccess.get_file_as_string(meta_path)
+	# 5. read bake metadata from the work dir. Blender's full log is kept in bake.log; we
+	# only echo it to the Godot console when something actually went wrong.
+	var meta_str := FileAccess.get_file_as_string(work + "/baked.json")
 	if meta_str.is_empty():
-		_dump_blender_log(out_dir)
-		push_error("pavlaka: missing bake metadata at %s — Blender exited 0 but wrote no result (see Blender log above)" % meta_path)
+		_dump_blender_log(work_abs)
+		push_error("pavlaka: Blender exited 0 but wrote no result (see Blender log above)")
 		return ERR_FILE_CANT_READ
 	var meta: Dictionary = JSON.parse_string(meta_str)
 	var baked_meshes: Array = meta.get("meshes", [])
 	var bake_errors: Array = meta.get("errors", [])
 	if baked_meshes.is_empty():
-		_dump_blender_log(out_dir)
+		_dump_blender_log(work_abs)
 		push_error("pavlaka: Blender bake produced no lightmaps (see Blender log above). Errors: %s"
 			% ("; ".join(PackedStringArray(bake_errors)) if not bake_errors.is_empty() else "none reported"))
 		return FAILED
 	if not bake_errors.is_empty():
-		push_warning("pavlaka: Blender reported %d bake error(s); see bake.log in %s" % [bake_errors.size(), out_dir])
+		push_warning("pavlaka: Blender reported %d bake error(s); see bake.log in %s" % [bake_errors.size(), work_abs])
 
-	# 5. import the per-mesh EXR slices as CompressedTexture2DArray.
-	# Prefer the light path (update_file + reimport_files): it (re)imports only these
-	# files and, crucially, does NOT trigger a project-wide script-class rescan — so it
-	# won't reload addon scripts mid-bake and kill this coroutine. A full scan() is only
-	# needed for brand-new files the EditorFileSystem doesn't know yet (e.g. after the
-	# output folder was deleted), so fall back to it only if the light path can't load.
-	var efs := EditorInterface.get_resource_filesystem()
-	var slice_paths := PackedStringArray()
-	var any_new := false
+	# 6. composite the per-mesh EXRs into one packed atlas (HDR/linear), blitting each into
+	# its chunk. A gutter was reserved during packing so neighbours can't bleed.
+	var atlas_img := Image.create(atlas_dim.x, atlas_dim.y, false, Image.FORMAT_RGBAF)
 	for m in baked_meshes:
-		var p: String = out_dir.path_join(m["file"])
-		if _write_exr_import(p): # true when a fresh .import was created (file is new)
-			any_new = true
-		efs.update_file(p)
-		slice_paths.append(p)
+		var nm: String = m["name"]
+		if not rect_by_name.has(nm):
+			push_warning("pavlaka: baked mesh '%s' not in packing; skipped" % nm)
+			continue
+		var slice := Image.load_from_file(work_abs.path_join(m["file"]))
+		if slice == null:
+			push_error("pavlaka: failed to read baked slice %s" % m["file"])
+			return ERR_FILE_CANT_READ
+		slice.convert(Image.FORMAT_RGBAF)
+		var r: Rect2i = rect_by_name[nm]
+		atlas_img.blit_rect(slice, Rect2i(Vector2i.ZERO, slice.get_size()), r.position)
 
-	var textures: Array = []
-	if not any_new:
-		# warm re-bake: files are already known/imported, so refresh them cheaply
-		# (no project-wide script rescan, and no "can't find file" on unknown files)
-		efs.reimport_files(slice_paths)
-		textures = _load_slices(baked_meshes, out_dir)
-	if textures.is_empty():
-		# cold case: files unknown to the EditorFileSystem — full scan + wait, then retry
+	# 7. save the atlas as the single lightmap texture in the output folder and import it
+	var atlas_path := out_dir.path_join("%s.exr" % out_dir.get_file())
+	if atlas_img.save_exr(atlas_path) != OK:
+		push_error("pavlaka: failed to save lightmap atlas to %s" % atlas_path)
+		return ERR_CANT_CREATE
+	# Prefer the light import path (update_file + reimport_files): it won't trigger a
+	# project-wide script-class rescan that would reload addon scripts mid-bake. Fall back to
+	# a full scan only for a brand-new file the EditorFileSystem doesn't know yet.
+	var efs := EditorInterface.get_resource_filesystem()
+	var fresh := _write_exr_import(atlas_path) # true when a new .import was created
+	efs.update_file(atlas_path)
+	var atlas_tex: Texture = null
+	if not fresh:
+		efs.reimport_files(PackedStringArray([atlas_path]))
+		atlas_tex = ResourceLoader.load(atlas_path, "", ResourceLoader.CACHE_MODE_IGNORE)
+	if atlas_tex == null:
 		var scanned := [false]
 		var on_changed := func(): scanned[0] = true
 		efs.filesystem_changed.connect(on_changed)
@@ -172,14 +194,15 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 			frames += 1
 		if efs.filesystem_changed.is_connected(on_changed):
 			efs.filesystem_changed.disconnect(on_changed)
-		textures = _load_slices(baked_meshes, out_dir)
-		if textures.is_empty():
-			push_error("pavlaka: failed to import baked lightmap slices (see Output)")
+		atlas_tex = ResourceLoader.load(atlas_path, "", ResourceLoader.CACHE_MODE_IGNORE)
+		if atlas_tex == null:
+			push_error("pavlaka: failed to import baked lightmap atlas (see Output)")
 			return ERR_FILE_CANT_READ
 
-	# 6. build the LightmapGIData (Godot combines the slices into one layered atlas)
+	# 8. build the LightmapGIData: one atlas texture, each mesh mapped to its sub-rect via
+	# add_user's uv_scale (remaps the mesh's [0,1] UV2 into its chunk of the atlas).
 	var data := LightmapGIData.new()
-	data.set_lightmap_textures(textures)
+	data.set_lightmap_textures([atlas_tex])
 	data.set_uses_spherical_harmonics(false)
 	var bounds := _world_aabb(targets)
 	# Keep probe points EMPTY so no probe gizmo is drawn. set_capture_data then forces the
@@ -195,15 +218,18 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 		"baked_exposure": float(meta.get("baked_exposure", 1.0)),
 		"lightprobe_hash": 0,
 	})
+	var aw := float(atlas_dim.x)
+	var ah := float(atlas_dim.y)
 	for m in baked_meshes:
-		var t := _find(targets, m["name"])
-		if t == null:
-			push_warning("pavlaka: baked mesh '%s' not found in scene; skipped" % m["name"])
+		var nm: String = m["name"]
+		var t := _find(targets, nm)
+		if t == null or not rect_by_name.has(nm):
 			continue
-		var uv: Array = m["uv_scale"]
-		data.add_user(t.path, Rect2(uv[0], uv[1], uv[2], uv[3]), int(m["slice_index"]), -1)
+		var r: Rect2i = rect_by_name[nm]
+		data.add_user(t.path,
+			Rect2(r.position.x / aw, r.position.y / ah, r.size.x / aw, r.size.y / ah), 0, -1)
 
-	# 7. save .lmbake (named after the scene, i.e. the output folder's leaf) and assign
+	# 9. save .lmbake (named after the scene, i.e. the output folder's leaf) and assign
 	var lmbake := out_dir.path_join("%s.lmbake" % out_dir.get_file())
 	err = ResourceSaver.save(data, lmbake)
 	if err != OK:
@@ -217,7 +243,8 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 		(lm as LightmapBlenderGI).baked_bounds = bounds
 	var secs := (Time.get_ticks_msec() - bake_start) / 1000
 	var took := ("%d m %d s" % [secs / 60, secs % 60]) if secs >= 60 else ("%d s" % secs)
-	print("pavlaka: baked %d mesh(es) in %s -> %s" % [data.get_user_count(), took, lmbake])
+	print("pavlaka: baked %d mesh(es) into a %dx%d atlas in %s -> %s"
+		% [data.get_user_count(), atlas_dim.x, atlas_dim.y, took, lmbake])
 	return OK
 
 
@@ -354,20 +381,6 @@ static func _scene_bake_dir(root: Node, base: String) -> String:
 	return base.path_join(scene_path.trim_prefix("res://").get_basename())
 
 
-# Load all per-mesh slices (fresh from disk) into a slice-indexed array. Returns []
-# if any slice isn't importable yet, so the caller can fall back to a full scan.
-static func _load_slices(baked_meshes: Array, out_dir: String) -> Array:
-	var textures: Array = []
-	textures.resize(baked_meshes.size())
-	for m in baked_meshes:
-		var p: String = out_dir.path_join(m["file"])
-		var tex := ResourceLoader.load(p, "", ResourceLoader.CACHE_MODE_IGNORE)
-		if tex == null:
-			return []
-		textures[int(m["slice_index"])] = tex
-	return textures
-
-
 static func _has_uv2(mesh: Mesh) -> bool:
 	# surface_get_arrays() works on every Mesh subclass (ArrayMesh + PrimitiveMesh);
 	# surface_get_format() is ArrayMesh-only, so we check the arrays instead.
@@ -380,6 +393,72 @@ static func _has_uv2(mesh: Mesh) -> bool:
 			if uv2 != null and uv2.size() > 0:
 				return true
 	return false
+
+
+# px gutter kept between packed meshes so neighbours can't bleed into each other
+const ATLAS_GUTTER := 4
+
+
+# World-space surface area of a mesh instance (triangle areas in world space, so a scaled
+# or larger object occupies proportionally more of the atlas).
+static func _world_surface_area(mi: MeshInstance3D) -> float:
+	var mesh := mi.mesh
+	if mesh == null:
+		return 0.0
+	var xform := mi.global_transform
+	var area := 0.0
+	for s in mesh.get_surface_count():
+		var arrays := mesh.surface_get_arrays(s)
+		var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		var idx: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+		if idx.size() >= 3:
+			for i in range(0, idx.size() - 2, 3):
+				area += 0.5 * (xform * verts[idx[i + 1]] - xform * verts[idx[i]]).cross(
+					xform * verts[idx[i + 2]] - xform * verts[idx[i]]).length()
+		elif verts.size() >= 3: # non-indexed triangles
+			for i in range(0, verts.size() - 2, 3):
+				area += 0.5 * (xform * verts[i + 1] - xform * verts[i]).cross(
+					xform * verts[i + 2] - xform * verts[i]).length()
+	return area
+
+
+# Pack the targets into one atlas: each mesh gets a square chunk sized by its world surface
+# area, chunks are bin-packed (Geometry2D.make_atlas) with a gutter, then the whole sheet is
+# scaled so its longest side == lightmap_size (aspect preserved). Returns
+# { "atlas": Vector2i, "rects": Array[Rect2i] } (rects aligned with `targets`), or {} if the
+# total area is zero.
+static func _pack_atlas(targets: Array[Target], lightmap_size: int) -> Dictionary:
+	var areas: Array[float] = []
+	var total := 0.0
+	for t in targets:
+		var a := _world_surface_area(t.node)
+		areas.append(a)
+		total += a
+	if total <= 0.0:
+		return {}
+	# scale so the square chunks' combined area ≈ lightmap_size² before packing waste
+	var k := float(lightmap_size) / sqrt(total)
+	var content: Array[float] = [] # content side (px) per mesh, before the final fit-scale
+	var sizes := PackedVector2Array()
+	for a in areas:
+		var side: float = max(8.0, sqrt(a) * k) # floor so tiny meshes still get some texels
+		content.append(side)
+		sizes.append(Vector2(side + ATLAS_GUTTER, side + ATLAS_GUTTER))
+	var packed := Geometry2D.make_atlas(sizes)
+	var points: PackedVector2Array = packed["points"]
+	var psize: Vector2i = packed["size"]
+	# scale the packed sheet so its longest side is exactly lightmap_size
+	var fit := float(lightmap_size) / float(maxi(psize.x, psize.y))
+	var atlas := Vector2i(roundi(psize.x * fit), roundi(psize.y * fit))
+	var rects: Array[Rect2i] = []
+	for i in targets.size():
+		# centre the content in its gutter-padded cell, then apply the fit-scale
+		var pos := (points[i] + Vector2(ATLAS_GUTTER, ATLAS_GUTTER) * 0.5) * fit
+		var sz: float = content[i] * fit
+		rects.append(Rect2i(
+			Vector2i(roundi(pos.x), roundi(pos.y)),
+			Vector2i(maxi(1, roundi(sz)), maxi(1, roundi(sz)))))
+	return {"atlas": atlas, "rects": rects}
 
 
 static func _world_aabb(targets: Array[Target]) -> AABB:

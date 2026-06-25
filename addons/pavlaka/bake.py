@@ -1,9 +1,10 @@
-"""Bake a Godot-exported scene's lightmaps (multi-mesh, one slice per mesh).
+"""Bake a Godot-exported scene's lightmaps (multi-mesh).
 
 Imports a glb from Godot, finds every lightmap target (mesh with >=2 UV layers = it
 carries a Godot UV2), and bakes IRRADIANCE (Diffuse, Direct+Indirect, Color OFF) into
-each target's UV2. Each mesh -> its own denoised linear EXR slice, named after the node.
-Godot combines the per-mesh slices into one layered atlas via set_lightmap_textures([...]).
+each target's UV2. Each mesh -> its own denoised linear EXR named after the node, sized
+to the per-mesh chunk size Godot computed from world-space surface area (params "sizes").
+Godot then composites these into one packed lightmap atlas.
 
   blender --background --python bake.py -- <glb> <out_dir> <params.json>
 
@@ -26,7 +27,9 @@ os.makedirs(out_dir, exist_ok=True)
 # bake parameters come from a JSON file written by the plugin
 with open(rest[2], "r") as _pf:
     PARAMS = json.load(_pf)
-ATLAS = int(PARAMS.get("atlas", 512))
+# per-mesh chunk size (px), keyed by node name; Godot computed these from world area
+SIZES = PARAMS.get("sizes", {})
+DEFAULT_SIZE = 512
 SAMPLES = int(PARAMS.get("samples", 256))
 AMBIENT = float(PARAMS.get("ambient_energy", 0.2))
 AMBIENT_RGB = PARAMS.get("ambient_color", [1.0, 1.0, 1.0])
@@ -48,7 +51,6 @@ def out(msg):
 
 def write_meta(meshes_meta, errors):
     meta = {
-        "atlas": {"width": ATLAS, "height": ATLAS, "slices": len(meshes_meta)},
         "baked_exposure": 1.0,
         "meshes": meshes_meta,
         "errors": errors,
@@ -57,7 +59,7 @@ def write_meta(meshes_meta, errors):
         json.dump(meta, f, indent=2)
 
 
-def denoise_over(image, out_path):
+def denoise_over(image, out_path, size):
     """Compositor OIDN denoise -> linear EXR at out_path (overwrites)."""
     sc = bpy.context.scene
     sc.use_nodes = True
@@ -68,8 +70,8 @@ def denoise_over(image, out_path):
     n_out = nt.nodes.new("CompositorNodeComposite")
     nt.links.new(n_img.outputs["Image"], n_dn.inputs["Image"])
     nt.links.new(n_dn.outputs["Image"], n_out.inputs["Image"])
-    sc.render.resolution_x = ATLAS
-    sc.render.resolution_y = ATLAS
+    sc.render.resolution_x = size
+    sc.render.resolution_y = size
     sc.render.resolution_percentage = 100
     sc.cycles.samples = 1
     sc.frame_start = sc.frame_end = 1
@@ -88,11 +90,11 @@ def denoise_over(image, out_path):
     return False
 
 
-def bake_one(scene, obj, slice_index, slice_path):
+def bake_one(scene, obj, slice_path, size):
     me = obj.data
     me.uv_layers.active_index = 1 if len(me.uv_layers) >= 2 else 0
 
-    img = bpy.data.images.new("LM_%s" % obj.name, width=ATLAS, height=ATLAS,
+    img = bpy.data.images.new("LM_%s" % obj.name, width=size, height=size,
                               float_buffer=True, is_data=True)
     mat = bpy.data.materials.new("BakeMat_%s" % obj.name)
     mat.use_nodes = True
@@ -116,7 +118,7 @@ def bake_one(scene, obj, slice_index, slice_path):
     img.filepath_raw = slice_path
     img.file_format = 'OPEN_EXR'
     img.save()
-    denoise_over(img, slice_path)
+    denoise_over(img, slice_path, size)
 
 
 def main():
@@ -180,14 +182,10 @@ def main():
             n += 1
         used_names.add(fname)
         slice_file = fname + ".exr"
+        size = int(SIZES.get(obj.name, DEFAULT_SIZE))
         try:
-            bake_one(scene, obj, slice_index, os.path.join(out_dir, slice_file))
-            meshes_meta.append({
-                "name": obj.name,
-                "slice_index": slice_index,
-                "uv_scale": [0.0, 0.0, 1.0, 1.0],  # full-0..1 UV2 -> identity remap
-                "file": slice_file,
-            })
+            bake_one(scene, obj, os.path.join(out_dir, slice_file), size)
+            meshes_meta.append({"name": obj.name, "file": slice_file})
         except Exception as e:
             errors.append("%s: %s" % (obj.name, e))
             out("PAVLAKA_BAKE: ERROR baking %s:\n%s" % (obj.name, traceback.format_exc()))
