@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://cd6kcup3habik"
-path="res://.godot/imported/blender_icon_1024x1024.png-6c7e3e6e820d355c533854e72545d408.ctex"
+uid="uid://cadxmvmt5vajv"
+path="res://.godot/imported/blender-icon.svg-71212f3f1d6a0df046ffddee22d7ce4e.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://addons/pavlaka/logos/blender_icon_1024x1024.png"
-dest_files=["res://.godot/imported/blender_icon_1024x1024.png-6c7e3e6e820d355c533854e72545d408.ctex"]
+source_file="res://addons/pavlaka/blender-icon.svg"
+dest_files=["res://.godot/imported/blender-icon.svg-71212f3f1d6a0df046ffddee22d7ce4e.ctex"]
 
 [params]
 
@@ -38,3 +38,6 @@ process/hdr_as_srgb=false
 process/hdr_clamp_exposure=false
 process/size_limit=0
 detect_3d/compress_to=1
+svg/scale=1.0
+editor/scale_with_editor_scale=false
+editor/convert_colors_with_editor_theme=false

@@ -128,20 +128,21 @@ func _update_button() -> void:
 	_btn.tooltip_text = "" if path_ok else "Set the Blender path in Project Settings → pavlaka/blender_path"
 
 
-# square Blender logo sizes available under logos/
-const _LOGO_SIZES := [16, 32, 64, 128, 256, 512, 1024]
+# the square blender-icon.svg's viewBox size, used to derive the rasterization scale
+const _SVG_SIZE := 499.77
 
 
-# Load the Blender logo at the available size nearest target_px (no resizing — we ship the
-# exact sizes under logos/). Returns null if the folder is missing.
-func _logo(target_px: int) -> Texture2D:
-	var best := _LOGO_SIZES[0]
-	for s in _LOGO_SIZES:
-		if absi(s - target_px) < absi(best - target_px):
-			best = s
-	var p := (get_script() as Script).resource_path.get_base_dir().path_join(
-		"logos/blender_icon_%dx%d.png" % [best, best])
-	return load(p) as Texture2D if ResourceLoader.exists(p) else null
+# Crisp Blender logo rasterized from the vector SVG at exactly px pixels — the same way the
+# engine renders its own icons, so it stays sharp at any editor scale/DPI. Null if missing.
+func _logo(px: int) -> Texture2D:
+	var svg := FileAccess.get_file_as_string(
+		(get_script() as Script).resource_path.get_base_dir().path_join("blender-icon.svg"))
+	if svg.is_empty():
+		return null
+	var img := Image.new()
+	if img.load_svg_from_string(svg, px / _SVG_SIZE) != OK:
+		return null
+	return ImageTexture.create_from_image(img)
 
 
 # build the inline progress strip ([logo] Baking… Ns [Cancel]); hidden until a bake starts
@@ -158,7 +159,7 @@ func _build_progress_strip() -> void:
 	lead.custom_minimum_size = Vector2(6, 0)
 	_progress.add_child(lead)
 	var strip_h := int(round(18.0 * EditorInterface.get_editor_scale()))
-	var logo := _logo(strip_h * 2) # a TextureRect scales, so feed 2x for a crisp downscale
+	var logo := _logo(strip_h) # rasterized from the SVG at exactly this size
 	if logo != null:
 		var icon := TextureRect.new()
 		icon.texture = logo
