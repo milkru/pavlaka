@@ -231,11 +231,25 @@ func _on_bake_pressed() -> void:
 
 	var ed_theme := EditorInterface.get_editor_theme()
 
-	# heading like LightmapGI's "Bake Lightmaps" (bold)
+	# title row: a square Blender icon + bold heading (like LightmapGI's "Bake Lightmaps")
+	var title_row := HBoxContainer.new()
+	title_row.add_theme_constant_override("separation", 8) # small gap between icon and text
+	var icon_path := (get_script() as Script).resource_path.get_base_dir().path_join(
+		"blender_logo_kit/square/blender_icon_64x64.png")
+	if ResourceLoader.exists(icon_path):
+		var icon := TextureRect.new()
+		icon.texture = load(icon_path)
+		icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		icon.custom_minimum_size = Vector2(20, 20)
+		icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		title_row.add_child(icon)
 	var heading := Label.new()
-	heading.text = "Bake with Blender"
+	heading.text = "Bake with Blender Cycles"
 	if ed_theme != null and ed_theme.has_font("bold", "EditorFonts"):
 		heading.add_theme_font_override("font", ed_theme.get_font("bold", "EditorFonts"))
+	heading.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	title_row.add_child(heading)
 
 	# Cycling indeterminate bar. The editor's bake popup styles its bar with the
 	# "PopupProgressBar" theme variation (lighter gray track) — NOT the default ProgressBar
@@ -251,7 +265,7 @@ func _on_bake_pressed() -> void:
 	var status := Label.new()
 	status.text = "In the oven…  0 s"
 
-	vb.add_child(heading)
+	vb.add_child(title_row)
 	vb.add_child(bar)
 	vb.add_child(status)
 	margin.add_child(vb)
