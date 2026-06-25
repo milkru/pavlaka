@@ -110,16 +110,13 @@ def bake_one(scene, obj, slice_index, slice_path):
     bpy.context.view_layer.objects.active = obj
 
     scene.cycles.samples = SAMPLES
-    out("PAVLAKA_BAKE: baking %s -> slice %d (uv_layers=%d, faces=%d)"
-        % (obj.name, slice_index, len(me.uv_layers), len(me.polygons)))
     bpy.ops.object.bake(type='DIFFUSE', pass_filter={'DIRECT', 'INDIRECT'},
                         margin=16, use_clear=True)
 
     img.filepath_raw = slice_path
     img.file_format = 'OPEN_EXR'
     img.save()
-    if denoise_over(img, slice_path):
-        out("PAVLAKA_BAKE: denoised slice %d" % slice_index)
+    denoise_over(img, slice_path)
 
 
 def main():
@@ -142,7 +139,6 @@ def main():
         env_tex.image = bpy.data.images.load(sky)
         wnt.links.new(env_tex.outputs["Color"], bg.inputs[0])
         bg.inputs[1].default_value = 1.0
-        out("PAVLAKA_BAKE: using scene sky panorama")
     else:
         # flat ambient dome (a new world's Background color defaults to near-black, so
         # set a real color and let AMBIENT control dome brightness)
@@ -156,7 +152,6 @@ def main():
             obj.data.energy = float(info["energy"]) * LIGHT_ENERGY_SCALE
             col = info["color"]
             obj.data.color = (col[0], col[1], col[2])
-            out("PAVLAKA_BAKE: light '%s' energy=%.3f" % (obj.name, obj.data.energy))
 
     bake = scene.render.bake
     bake.use_pass_direct = True
@@ -169,7 +164,7 @@ def main():
     targets = [o for o in bpy.data.objects
                if o.type == 'MESH' and len(o.data.uv_layers) >= 2]
     targets.sort(key=lambda o: o.name)  # stable slice order
-    out("PAVLAKA_BAKE: lightmap targets = %s" % [o.name for o in targets])
+    out("PAVLAKA_BAKE: %d lightmap target(s)" % len(targets))
 
     meshes_meta = []
     errors = []

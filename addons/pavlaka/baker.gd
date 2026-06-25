@@ -43,6 +43,8 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 		push_error("pavlaka: Blender executable not found: '%s'" % blender_path)
 		return ERR_FILE_NOT_FOUND
 
+	var bake_start := Time.get_ticks_msec()
+
 	# 1. collect static meshes that carry a UV2 (the lightmap UV Godot owns)
 	var targets: Array[Target] = []
 	_collect(root, lm, targets)
@@ -120,25 +122,26 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 			return ERR_SKIP
 		_report(progress, "Rendering…  %ds" % ((Time.get_ticks_msec() - start_ms) / 1000))
 		await Engine.get_main_loop().process_frame
-	# surface Blender's log for diagnostics (it mirrors everything bake.py printed)
-	var log_txt := FileAccess.get_file_as_string(out_dir.path_join("bake.log"))
-	if not log_txt.is_empty():
-		print("pavlaka: --- Blender log ---\n%s\npavlaka: --- end ---" % log_txt)
 
-	# 4. read bake metadata
+	# 4. read bake metadata. Blender's full log is kept in bake.log; we only echo it to the
+	# Godot console when something actually went wrong (otherwise it's just noise).
 	_report(progress, "Importing lightmaps…")
 	var meta_path := out_dir.path_join("baked.json")
 	var meta_str := FileAccess.get_file_as_string(meta_path)
 	if meta_str.is_empty():
-		push_error("pavlaka: missing bake metadata at %s — Blender exited 0 but wrote no result (see output above)" % meta_path)
+		_dump_blender_log(out_dir)
+		push_error("pavlaka: missing bake metadata at %s — Blender exited 0 but wrote no result (see Blender log above)" % meta_path)
 		return ERR_FILE_CANT_READ
 	var meta: Dictionary = JSON.parse_string(meta_str)
 	var baked_meshes: Array = meta.get("meshes", [])
 	var bake_errors: Array = meta.get("errors", [])
 	if baked_meshes.is_empty():
-		push_error("pavlaka: Blender bake produced no lightmaps (see bake.log). Errors: %s"
+		_dump_blender_log(out_dir)
+		push_error("pavlaka: Blender bake produced no lightmaps (see Blender log above). Errors: %s"
 			% ("; ".join(PackedStringArray(bake_errors)) if not bake_errors.is_empty() else "none reported"))
 		return FAILED
+	if not bake_errors.is_empty():
+		push_warning("pavlaka: Blender reported %d bake error(s); see bake.log in %s" % [bake_errors.size(), out_dir])
 
 	# 5. import the per-mesh EXR slices as CompressedTexture2DArray.
 	# Prefer the light path (update_file + reimport_files): it (re)imports only these
@@ -217,8 +220,16 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 	RenderingServer.lightmap_set_probe_bounds(data.get_rid(), bounds)
 	if lm is LightmapBlenderGI:
 		(lm as LightmapBlenderGI).baked_bounds = bounds
-	print("pavlaka: baked %d mesh(es) -> %s" % [data.get_user_count(), lmbake])
+	var secs := (Time.get_ticks_msec() - bake_start) / 1000
+	var took := ("%d m %d s" % [secs / 60, secs % 60]) if secs >= 60 else ("%d s" % secs)
+	print("pavlaka: baked %d mesh(es) in %s -> %s" % [data.get_user_count(), took, lmbake])
 	return OK
+
+
+static func _dump_blender_log(out_dir: String) -> void:
+	var log_txt := FileAccess.get_file_as_string(out_dir.path_join("bake.log"))
+	if not log_txt.is_empty():
+		print("pavlaka: --- Blender log ---\n%s\npavlaka: --- end ---" % log_txt)
 
 
 static func _collect(node: Node, lm: LightmapGI, out: Array[Target]) -> void:

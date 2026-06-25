@@ -227,8 +227,11 @@ func _on_bake_pressed() -> void:
 	var dlg := AcceptDialog.new()
 	dlg.exclusive = false
 	# Borderless like LightmapGI's bake popup: no OS title bar/close button, just a panel
-	# with an in-dialog heading (so there's no title bar to carry the Blender icon).
+	# with an in-dialog heading (so there's no title bar to carry the Blender icon). It's
+	# dragged by the title row (see below). Always-on-top so it stays visible while you keep
+	# working in the editor during the (non-blocking) bake.
 	dlg.set_flag(Window.FLAG_BORDERLESS, true)
+	dlg.always_on_top = true
 	dlg.title = "Bake with Blender"
 	dlg.get_ok_button().hide()
 	dlg.unresizable = true
@@ -255,13 +258,25 @@ func _on_bake_pressed() -> void:
 		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		icon.custom_minimum_size = Vector2(20, 20)
 		icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		icon.mouse_filter = Control.MOUSE_FILTER_IGNORE # let drags reach the title row
 		title_row.add_child(icon)
 	var heading := Label.new()
 	heading.text = "Bake with Blender Cycles"
 	if ed_theme != null and ed_theme.has_font("bold", "EditorFonts"):
 		heading.add_theme_font_override("font", ed_theme.get_font("bold", "EditorFonts"))
 	heading.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	heading.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	title_row.add_child(heading)
+
+	# the title row is the drag handle (borderless windows have no title bar to grab)
+	title_row.mouse_filter = Control.MOUSE_FILTER_STOP
+	title_row.mouse_default_cursor_shape = Control.CURSOR_MOVE
+	var dragging := [false]
+	title_row.gui_input.connect(func(ev: InputEvent):
+		if ev is InputEventMouseButton and (ev as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
+			dragging[0] = (ev as InputEventMouseButton).pressed
+		elif ev is InputEventMouseMotion and dragging[0]:
+			dlg.position += Vector2i((ev as InputEventMouseMotion).relative))
 
 	# Cycling indeterminate bar. The editor's bake popup styles its bar with the
 	# "PopupProgressBar" theme variation (lighter gray track) — NOT the default ProgressBar
