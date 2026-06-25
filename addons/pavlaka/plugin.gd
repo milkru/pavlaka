@@ -234,8 +234,7 @@ func _on_bake_pressed() -> void:
 	# title row: a square Blender icon + bold heading (like LightmapGI's "Bake Lightmaps")
 	var title_row := HBoxContainer.new()
 	title_row.add_theme_constant_override("separation", 4) # small gap between icon and text
-	var icon_path := (get_script() as Script).resource_path.get_base_dir().path_join(
-		"blender_logo_kit/square/blender_icon_64x64.png")
+	var icon_path := (get_script() as Script).resource_path.get_base_dir().path_join("blender_icon.png")
 	if ResourceLoader.exists(icon_path):
 		var icon := TextureRect.new()
 		icon.texture = load(icon_path)
