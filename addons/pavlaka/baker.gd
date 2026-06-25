@@ -259,6 +259,10 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 	if err != OK:
 		push_error("pavlaka: saving .lmbake failed (%d)" % err)
 		return err
+	# Link the in-memory resource to the saved file so the scene references the .lmbake
+	# externally (like native LightmapGI) instead of embedding the whole LightmapGIData inline.
+	data.take_over_path(lmbake)
+	efs.update_file(lmbake) # let the editor track the new .lmbake file
 	lm.light_data = data
 	# Apply the real bounds to the RenderingServer now (this session) and store them on
 	# the node so they're re-applied on load — without any probe point (hence no gizmo).
