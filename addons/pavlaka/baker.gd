@@ -14,7 +14,8 @@ const BAKE_SCRIPT := "res://addons/pavlaka/bake.py"
 
 const DEFAULTS := {
 	"out_dir": "res://lightmaps/",
-	"atlas": 512,
+	"page_size": 1024,
+	"texel_size": 0.1,
 	"quality": 1, # LightmapGI BakeQuality: 0 Low, 1 Medium, 2 High, 3 Ultra
 	"light_energy_scale": 1.0,
 	"environment_mode": 1, # SCENE
@@ -53,20 +54,27 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 	print("pavlaka: %d lightmap target(s): %s" % [targets.size(),
 		targets.map(func(t): return t.name)])
 
-	# 2. pack the atlas: each mesh gets a chunk of the single lightmap sized by its
-	# world-space surface area; the packed sheet is scaled to lightmap_size (see
-	# _pack_atlas). Done before baking so each mesh can be baked at its exact chunk size.
-	var pack := _pack_atlas(targets, int(cfg["lightmap_size"]))
-	if pack.is_empty():
+	# 2. pack the atlas pages: each mesh gets a square chunk sized by its world-space surface
+	# area at the chosen texel density, shelf-packed into page_size² pages (see _pack_pages).
+	# Done before baking so each mesh can be baked at its exact chunk size.
+	var page_size := int(cfg["page_size"])
+	var pack := _pack_pages(targets, page_size, float(cfg["texel_size"]))
+	var n_pages: int = pack["pages"]
+	var placements: Array = pack["placements"] # {page, rect}, aligned with `targets`
+	if n_pages == 0:
 		push_error("pavlaka: targets have zero surface area; nothing to bake")
 		return ERR_INVALID_DATA
-	var atlas_dim: Vector2i = pack["atlas"]
-	var rects: Array = pack["rects"] # Array[Rect2i], aligned with `targets`
-	var rect_by_name := {}
+	for nm in pack["fallbacks"]:
+		push_warning(("pavlaka: mesh '%s' is too large to fit a %dpx page at texel_size %.3f; "
+			+ "its lightmap was shrunk to fit (lower density there). Split the mesh, increase "
+			+ "page_size, or raise texel_size.") % [nm, page_size, float(cfg["texel_size"])])
+	if n_pages > 8:
+		push_warning("pavlaka: bake uses %d atlas pages — raise texel_size for fewer/lower-res pages if VRAM is a concern" % n_pages)
+	var place_by_name := {}
 	var size_by_name := {}
 	for i in targets.size():
-		rect_by_name[targets[i].name] = rects[i]
-		size_by_name[targets[i].name] = (rects[i] as Rect2i).size.x # chunks are square
+		place_by_name[targets[i].name] = placements[i]
+		size_by_name[targets[i].name] = (placements[i]["rect"] as Rect2i).size.x # chunks are square
 
 	# 3. export the scene (geometry + lights) to a temp glb for Blender.
 	# Build a fresh export tree (copied meshes + lights, in world space) instead of
@@ -152,12 +160,14 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 	if not bake_errors.is_empty():
 		push_warning("pavlaka: Blender reported %d bake error(s); see bake.log in %s" % [bake_errors.size(), work_abs])
 
-	# 6. composite the per-mesh EXRs into one packed atlas (HDR/linear), blitting each into
-	# its chunk. A gutter was reserved during packing so neighbours can't bleed.
-	var atlas_img := Image.create(atlas_dim.x, atlas_dim.y, false, Image.FORMAT_RGBAF)
+	# 6. composite the per-mesh EXRs into the atlas pages (HDR/linear), blitting each into its
+	# chunk on its assigned page. A gutter was reserved during packing so meshes can't bleed.
+	var page_imgs: Array = []
+	for _i in n_pages:
+		page_imgs.append(Image.create(page_size, page_size, false, Image.FORMAT_RGBAF))
 	for m in baked_meshes:
 		var nm: String = m["name"]
-		if not rect_by_name.has(nm):
+		if not place_by_name.has(nm):
 			push_warning("pavlaka: baked mesh '%s' not in packing; skipped" % nm)
 			continue
 		var slice := Image.load_from_file(work_abs.path_join(m["file"]))
@@ -165,25 +175,32 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 			push_error("pavlaka: failed to read baked slice %s" % m["file"])
 			return ERR_FILE_CANT_READ
 		slice.convert(Image.FORMAT_RGBAF)
-		var r: Rect2i = rect_by_name[nm]
-		atlas_img.blit_rect(slice, Rect2i(Vector2i.ZERO, slice.get_size()), r.position)
+		var pl: Dictionary = place_by_name[nm]
+		var r: Rect2i = pl["rect"]
+		(page_imgs[pl["page"]] as Image).blit_rect(slice, Rect2i(Vector2i.ZERO, slice.get_size()), r.position)
 
-	# 7. save the atlas as the single lightmap texture in the output folder and import it
-	var atlas_path := out_dir.path_join("%s.exr" % out_dir.get_file())
-	if atlas_img.save_exr(atlas_path) != OK:
-		push_error("pavlaka: failed to save lightmap atlas to %s" % atlas_path)
-		return ERR_CANT_CREATE
+	# 7. save each page and import it as a CompressedTexture2DArray (one per page).
 	# Prefer the light import path (update_file + reimport_files): it won't trigger a
 	# project-wide script-class rescan that would reload addon scripts mid-bake. Fall back to
-	# a full scan only for a brand-new file the EditorFileSystem doesn't know yet.
+	# a full scan only for brand-new files the EditorFileSystem doesn't know yet.
 	var efs := EditorInterface.get_resource_filesystem()
-	var fresh := _write_exr_import(atlas_path) # true when a new .import was created
-	efs.update_file(atlas_path)
-	var atlas_tex: Texture = null
-	if not fresh:
-		efs.reimport_files(PackedStringArray([atlas_path]))
-		atlas_tex = ResourceLoader.load(atlas_path, "", ResourceLoader.CACHE_MODE_IGNORE)
-	if atlas_tex == null:
+	var page_paths := PackedStringArray()
+	var fresh_any := false
+	for i in n_pages:
+		var pp := out_dir.path_join("%s_%d.exr" % [out_dir.get_file(), i])
+		if (page_imgs[i] as Image).save_exr(pp) != OK:
+			push_error("pavlaka: failed to save lightmap page %s" % pp)
+			return ERR_CANT_CREATE
+		if _write_exr_import(pp):
+			fresh_any = true
+		efs.update_file(pp)
+		page_paths.append(pp)
+	_cleanup_stale_pages(out_dir, n_pages) # drop pages left by a denser previous bake
+	var page_texes: Array = []
+	if not fresh_any:
+		efs.reimport_files(page_paths)
+		page_texes = _load_pages(page_paths)
+	if page_texes.is_empty():
 		var scanned := [false]
 		var on_changed := func(): scanned[0] = true
 		efs.filesystem_changed.connect(on_changed)
@@ -194,15 +211,15 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 			frames += 1
 		if efs.filesystem_changed.is_connected(on_changed):
 			efs.filesystem_changed.disconnect(on_changed)
-		atlas_tex = ResourceLoader.load(atlas_path, "", ResourceLoader.CACHE_MODE_IGNORE)
-		if atlas_tex == null:
-			push_error("pavlaka: failed to import baked lightmap atlas (see Output)")
+		page_texes = _load_pages(page_paths)
+		if page_texes.is_empty():
+			push_error("pavlaka: failed to import baked lightmap pages (see Output)")
 			return ERR_FILE_CANT_READ
 
-	# 8. build the LightmapGIData: one atlas texture, each mesh mapped to its sub-rect via
-	# add_user's uv_scale (remaps the mesh's [0,1] UV2 into its chunk of the atlas).
+	# 8. build the LightmapGIData: the pages as texture layers, each mesh mapped to its page +
+	# sub-rect via add_user's uv_scale (remaps the mesh's [0,1] UV2 into its chunk).
 	var data := LightmapGIData.new()
-	data.set_lightmap_textures([atlas_tex])
+	data.set_lightmap_textures(page_texes)
 	data.set_uses_spherical_harmonics(false)
 	var bounds := _world_aabb(targets)
 	# Keep probe points EMPTY so no probe gizmo is drawn. set_capture_data then forces the
@@ -218,16 +235,17 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 		"baked_exposure": float(meta.get("baked_exposure", 1.0)),
 		"lightprobe_hash": 0,
 	})
-	var aw := float(atlas_dim.x)
-	var ah := float(atlas_dim.y)
+	var ps := float(page_size)
 	for m in baked_meshes:
 		var nm: String = m["name"]
 		var t := _find(targets, nm)
-		if t == null or not rect_by_name.has(nm):
+		if t == null or not place_by_name.has(nm):
 			continue
-		var r: Rect2i = rect_by_name[nm]
+		var pl: Dictionary = place_by_name[nm]
+		var r: Rect2i = pl["rect"]
 		data.add_user(t.path,
-			Rect2(r.position.x / aw, r.position.y / ah, r.size.x / aw, r.size.y / ah), 0, -1)
+			Rect2(r.position.x / ps, r.position.y / ps, r.size.x / ps, r.size.y / ps),
+			int(pl["page"]), -1)
 
 	# 9. save .lmbake (named after the scene, i.e. the output folder's leaf) and assign
 	var lmbake := out_dir.path_join("%s.lmbake" % out_dir.get_file())
@@ -243,8 +261,8 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 		(lm as LightmapBlenderGI).baked_bounds = bounds
 	var secs := (Time.get_ticks_msec() - bake_start) / 1000
 	var took := ("%d m %d s" % [secs / 60, secs % 60]) if secs >= 60 else ("%d s" % secs)
-	print("pavlaka: baked %d mesh(es) into a %dx%d atlas in %s -> %s"
-		% [data.get_user_count(), atlas_dim.x, atlas_dim.y, took, lmbake])
+	print("pavlaka: baked %d mesh(es) into %d page(s) of %dpx in %s -> %s"
+		% [data.get_user_count(), n_pages, page_size, took, lmbake])
 	return OK
 
 
@@ -252,6 +270,33 @@ static func _dump_blender_log(out_dir: String) -> void:
 	var log_txt := FileAccess.get_file_as_string(out_dir.path_join("bake.log"))
 	if not log_txt.is_empty():
 		print("pavlaka: --- Blender log ---\n%s\npavlaka: --- end ---" % log_txt)
+
+
+# Load each page texture fresh from disk. Returns [] if any isn't importable yet, so the
+# caller can fall back to a full scan.
+static func _load_pages(paths: PackedStringArray) -> Array:
+	var texes: Array = []
+	for p in paths:
+		var tex := ResourceLoader.load(p, "", ResourceLoader.CACHE_MODE_IGNORE)
+		if tex == null:
+			return []
+		texes.append(tex)
+	return texes
+
+
+# Remove page EXRs (+ .import) left by a previous, denser bake that needed more pages — and
+# the old single-atlas "<scene>.exr" from before multi-page — so the folder stays tidy.
+static func _cleanup_stale_pages(out_dir: String, n_pages: int) -> void:
+	var leaf := out_dir.get_file()
+	var stale := PackedStringArray([out_dir.path_join("%s.exr" % leaf)])
+	var i := n_pages
+	while FileAccess.file_exists(out_dir.path_join("%s_%d.exr" % [leaf, i])):
+		stale.append(out_dir.path_join("%s_%d.exr" % [leaf, i]))
+		i += 1
+	for p in stale:
+		if FileAccess.file_exists(p):
+			DirAccess.remove_absolute(ProjectSettings.globalize_path(p))
+			DirAccess.remove_absolute(ProjectSettings.globalize_path(p + ".import"))
 
 
 static func _collect(node: Node, lm: LightmapGI, out: Array[Target]) -> void:
@@ -422,43 +467,61 @@ static func _world_surface_area(mi: MeshInstance3D) -> float:
 	return area
 
 
-# Pack the targets into one atlas: each mesh gets a square chunk sized by its world surface
-# area, chunks are bin-packed (Geometry2D.make_atlas) with a gutter, then the whole sheet is
-# scaled so its longest side == lightmap_size (aspect preserved). Returns
-# { "atlas": Vector2i, "rects": Array[Rect2i] } (rects aligned with `targets`), or {} if the
-# total area is zero.
-static func _pack_atlas(targets: Array[Target], lightmap_size: int) -> Dictionary:
-	var areas: Array[float] = []
-	var total := 0.0
+# Pack the targets into fixed-size atlas pages at a uniform texel density (no stretching).
+# Each mesh's square chunk side = sqrt(world area) / texel_size (px); chunks are shelf-packed
+# into page_size² pages, opening new pages as needed (multi-page like the native lightmapper).
+# A mesh whose chunk can't fit one page is shrunk to fit and its name returned in "fallbacks".
+# Returns { "pages": int, "placements": Array ({page:int, rect:Rect2i}, aligned with targets),
+# "fallbacks": Array[String] }.
+static func _pack_pages(targets: Array[Target], page_size: int, texel_size: float) -> Dictionary:
+	var inner := maxi(1, page_size - ATLAS_GUTTER) # leave a gutter so nothing touches the edge
+	var ts: float = texel_size if texel_size > 0.0001 else 0.1
+	var sizes: Array[int] = []
+	var fallbacks: Array[String] = []
 	for t in targets:
-		var a := _world_surface_area(t.node)
-		areas.append(a)
-		total += a
-	if total <= 0.0:
-		return {}
-	# scale so the square chunks' combined area ≈ lightmap_size² before packing waste
-	var k := float(lightmap_size) / sqrt(total)
-	var content: Array[float] = [] # content side (px) per mesh, before the final fit-scale
-	var sizes := PackedVector2Array()
-	for a in areas:
-		var side: float = max(8.0, sqrt(a) * k) # floor so tiny meshes still get some texels
-		content.append(side)
-		sizes.append(Vector2(side + ATLAS_GUTTER, side + ATLAS_GUTTER))
-	var packed := Geometry2D.make_atlas(sizes)
-	var points: PackedVector2Array = packed["points"]
-	var psize: Vector2i = packed["size"]
-	# scale the packed sheet so its longest side is exactly lightmap_size
-	var fit := float(lightmap_size) / float(maxi(psize.x, psize.y))
-	var atlas := Vector2i(roundi(psize.x * fit), roundi(psize.y * fit))
-	var rects: Array[Rect2i] = []
-	for i in targets.size():
-		# centre the content in its gutter-padded cell, then apply the fit-scale
-		var pos := (points[i] + Vector2(ATLAS_GUTTER, ATLAS_GUTTER) * 0.5) * fit
-		var sz: float = content[i] * fit
-		rects.append(Rect2i(
-			Vector2i(roundi(pos.x), roundi(pos.y)),
-			Vector2i(maxi(1, roundi(sz)), maxi(1, roundi(sz)))))
-	return {"atlas": atlas, "rects": rects}
+		var s := int(maxi(8, roundi(sqrt(_world_surface_area(t.node)) / ts)))
+		if s > inner:
+			s = inner # too big for a page: shrink to fit (lower density) instead of erroring
+			fallbacks.append(t.name)
+		sizes.append(s)
+	# place largest chunks first (better shelf packing), first-fit across pages
+	var order := range(targets.size())
+	order.sort_custom(func(a, b): return sizes[a] > sizes[b])
+	var pages: Array = [] # each: { "bottom": int, "shelves": Array[{y,h,x}] }
+	var placements: Array = []
+	placements.resize(targets.size())
+	for idx in order:
+		var s: int = sizes[idx]
+		var cell := s + ATLAS_GUTTER
+		var placed := false
+		for pi in pages.size():
+			var pg: Dictionary = pages[pi]
+			for shelf in pg["shelves"]:
+				if shelf["x"] + cell <= page_size and cell <= shelf["h"]:
+					placements[idx] = {"page": pi, "rect": _cell_rect(shelf["x"], shelf["y"], s)}
+					shelf["x"] += cell
+					placed = true
+					break
+			if placed:
+				break
+			if pg["bottom"] + cell <= page_size: # open a new shelf in this page
+				var y: int = pg["bottom"]
+				pg["shelves"].append({"y": y, "h": cell, "x": cell})
+				pg["bottom"] = y + cell
+				placements[idx] = {"page": pi, "rect": _cell_rect(0, y, s)}
+				placed = true
+				break
+		if not placed: # need a new page
+			pages.append({"bottom": cell, "shelves": [{"y": 0, "h": cell, "x": cell}]})
+			placements[idx] = {"page": pages.size() - 1, "rect": _cell_rect(0, 0, s)}
+	return {"pages": pages.size(), "placements": placements, "fallbacks": fallbacks}
+
+
+# Content rect inside a gutter-padded cell whose top-left is (cx, cy), content side s.
+static func _cell_rect(cx: int, cy: int, s: int) -> Rect2i:
+	@warning_ignore("integer_division")
+	var h := ATLAS_GUTTER / 2
+	return Rect2i(Vector2i(cx + h, cy + h), Vector2i(s, s))
 
 
 static func _world_aabb(targets: Array[Target]) -> AABB:

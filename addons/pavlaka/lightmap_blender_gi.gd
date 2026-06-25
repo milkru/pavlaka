@@ -12,10 +12,14 @@ extends LightmapGI
 @export_group("Blender Bake")
 ## Where the baked .lmbake and EXR slices are written.
 @export_dir var output_dir: String = "res://lightmaps"
-## Size (longest side, px) of the single packed lightmap atlas for the whole scene. Each
-## mesh gets a share of the atlas proportional to its world-space surface area; the packed
-## sheet is then scaled so its longest side equals this (aspect preserved).
-@export var lightmap_size: int = 2048
+## Size (px) of each square atlas page. Meshes are packed across as many pages as needed
+## (multi-page, like the native lightmapper). A mesh whose chunk can't fit one page is
+## shrunk to fit and a warning is logged.
+@export var page_size: int = 1024
+## World units per texel (smaller = sharper, more texels). Each mesh's lightmap chunk is
+## sized sqrt(world surface area) / texel_size, so texel density is uniform across the
+## scene — no stretching. Tune to your scene's scale.
+@export var texel_size: float = 0.1
 # Quality (Low/Medium/High/Ultra) reuses LightmapGI's own inherited "quality" property and
 # maps to Cycles samples in the baker (see _validate_property / get_bake_opts).
 
@@ -33,7 +37,8 @@ extends LightmapGI
 func get_bake_opts() -> Dictionary:
 	return {
 		"out_dir": output_dir,
-		"lightmap_size": lightmap_size,
+		"page_size": page_size,
+		"texel_size": texel_size,
 		"quality": quality, # inherited LightmapGI property; mapped to samples in the baker
 		"light_energy_scale": light_energy_scale,
 		# these are LightmapGI's own inherited Environment properties
