@@ -31,6 +31,10 @@ with open(rest[2], "r") as _pf:
 SIZES = PARAMS.get("sizes", {})
 DEFAULT_SIZE = 512
 SAMPLES = int(PARAMS.get("samples", 256))
+USE_GPU = bool(PARAMS.get("use_gpu", False))
+MARGIN = int(PARAMS.get("bake_margin", 16))
+DENOISE = bool(PARAMS.get("denoise", True))
+BOUNCES = int(PARAMS.get("bounces", 3))
 AMBIENT = float(PARAMS.get("ambient_energy", 0.2))
 AMBIENT_RGB = PARAMS.get("ambient_color", [1.0, 1.0, 1.0])
 LIGHT_ENERGY_SCALE = float(PARAMS.get("light_energy_scale", 1.0))
@@ -113,12 +117,42 @@ def bake_one(scene, obj, slice_path, size):
 
     scene.cycles.samples = SAMPLES
     bpy.ops.object.bake(type='DIFFUSE', pass_filter={'DIRECT', 'INDIRECT'},
-                        margin=16, use_clear=True)
+                        margin=MARGIN, use_clear=True)
 
     img.filepath_raw = slice_path
     img.file_format = 'OPEN_EXR'
     img.save()
-    denoise_over(img, slice_path, size)
+    if DENOISE:
+        denoise_over(img, slice_path, size)
+
+
+def setup_device(scene):
+    """Render on GPU if requested and available, else CPU. Never fails the bake."""
+    if not USE_GPU:
+        scene.cycles.device = 'CPU'
+        return
+    try:
+        prefs = bpy.context.preferences.addons['cycles'].preferences
+        prefs.get_devices()
+        for backend in ('OPTIX', 'CUDA', 'HIP', 'METAL', 'ONEAPI'):
+            try:
+                prefs.compute_device_type = backend
+            except TypeError:
+                continue  # backend not supported by this build
+            prefs.get_devices()
+            n = 0
+            for d in prefs.devices:
+                on = (d.type == backend)
+                d.use = on
+                n += 1 if on else 0
+            if n > 0:
+                scene.cycles.device = 'GPU'
+                out("PAVLAKA_BAKE: GPU enabled (%s, %d device(s))" % (backend, n))
+                return
+        out("PAVLAKA_BAKE: no GPU compute device found; using CPU")
+    except Exception as e:
+        out("PAVLAKA_BAKE: GPU setup failed (%s); using CPU" % e)
+    scene.cycles.device = 'CPU'
 
 
 def main():
@@ -128,8 +162,9 @@ def main():
 
     scene = bpy.context.scene
     scene.render.engine = 'CYCLES'
-    scene.cycles.device = 'CPU'
+    setup_device(scene)
     scene.cycles.samples = SAMPLES
+    scene.cycles.diffuse_bounces = BOUNCES # indirect GI bounce count for the irradiance bake
     scene.world = bpy.data.worlds.new("World")
     scene.world.use_nodes = True
     wnt = scene.world.node_tree
@@ -159,7 +194,7 @@ def main():
     bake.use_pass_direct = True
     bake.use_pass_indirect = True
     bake.use_pass_color = False        # irradiance, not radiance
-    bake.margin = 16
+    bake.margin = MARGIN
     bake.margin_type = 'EXTEND'
     bake.use_clear = True
 

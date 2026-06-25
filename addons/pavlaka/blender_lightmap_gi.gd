@@ -26,6 +26,15 @@ extends LightmapGI
 # Sky, 3 Custom Color.
 
 @export_group("Blender Bake")
+## Render the bake on the GPU if a compute device is available (much faster), otherwise fall
+## back to the CPU. Leave off if GPU baking is unstable on your machine.
+@export var use_gpu: bool = false
+## Pixels the baked result is dilated past each UV island edge. Higher reduces dark seams and
+## bleeding between charts at the cost of some atlas space; too low can show black edges.
+@export_range(0, 64) var bake_margin: int = 16
+## Run OIDN denoising on each baked page. Strongly recommended (low sample counts are noisy);
+## turn off only to inspect the raw bake.
+@export var denoise: bool = true
 ## Compress the baked lightmap textures to save GPU memory.
 ##
 ## Off (default): lossless. Each atlas page keeps its exact content fit size and never
@@ -50,6 +59,10 @@ func get_bake_opts() -> Dictionary:
 		"texel_scale": texel_scale, # inherited LightmapGI property; density multiplier
 		"quality": quality, # inherited LightmapGI property; mapped to samples in the baker
 		"compress": compress_lightmaps,
+		"use_gpu": use_gpu,
+		"bounces": bounces, # inherited LightmapGI property; Cycles diffuse bounces
+		"bake_margin": bake_margin,
+		"denoise": denoise,
 		"light_energy_scale": light_energy_scale,
 		# these are LightmapGI's own inherited Environment properties
 		"environment_mode": environment_mode,
@@ -86,7 +99,7 @@ var _inherited_props: Dictionary = {}
 # reuse), the Quality dropdown, and the Data > Light Data slot (the baked .lmbake, shown like
 # native so it can be inspected/cleared). "Data" is the group header for light_data.
 const _KEEP_VISIBLE := {
-	"quality": true, "texel_scale": true, "max_texture_size": true,
+	"quality": true, "texel_scale": true, "max_texture_size": true, "bounces": true,
 	"environment_mode": true, "environment_custom_sky": true,
 	"environment_custom_color": true, "environment_custom_energy": true,
 	"Data": true, "light_data": true,

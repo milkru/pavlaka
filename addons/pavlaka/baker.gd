@@ -19,6 +19,10 @@ const DEFAULTS := {
 	"max_texture_size": 16384, # LightmapGI's own cap on each atlas page's dimensions
 	"texel_scale": 1.0, # LightmapGI's density multiplier (higher = sharper / more texels)
 	"compress": false, # VRAM-compress pages (smaller, POT-rounded) vs lossless exact-fit
+	"use_gpu": false,  # render the bake on GPU if available, else CPU
+	"bounces": 3,      # Cycles diffuse bounces (indirect GI)
+	"bake_margin": 16, # px the bake is dilated past each UV island edge
+	"denoise": true,   # OIDN denoise each page
 	"quality": 1, # LightmapGI BakeQuality: 0 Low, 1 Medium, 2 High, 3 Ultra
 	"light_energy_scale": 1.0,
 	"environment_mode": 1, # SCENE
@@ -123,6 +127,10 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 	var params := {
 		"sizes": size_by_name, # per-mesh square chunk size in px
 		"samples": _samples_for_quality(int(cfg["quality"])),
+		"use_gpu": cfg["use_gpu"],
+		"bounces": cfg["bounces"],
+		"bake_margin": cfg["bake_margin"],
+		"denoise": cfg["denoise"],
 		"light_energy_scale": cfg["light_energy_scale"],
 		"lights": lights,
 		"sky_panorama": env["sky_panorama"],
