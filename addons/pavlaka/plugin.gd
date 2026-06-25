@@ -137,7 +137,7 @@ const _SVG_SIZE := 499.77
 # engine renders its own icons, so it stays sharp at any editor scale/DPI. Null if missing.
 func _logo(px: int) -> Texture2D:
 	var svg := FileAccess.get_file_as_string(
-		(get_script() as Script).resource_path.get_base_dir().path_join("blender-icon.svg"))
+		(get_script() as Script).resource_path.get_base_dir().path_join("blender-logo.svg"))
 	if svg.is_empty():
 		return null
 	var img := Image.new()
