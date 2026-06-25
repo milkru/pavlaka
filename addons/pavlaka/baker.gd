@@ -13,7 +13,6 @@ extends RefCounted
 const BAKE_SCRIPT := "res://addons/pavlaka/bake.py"
 
 const DEFAULTS := {
-	"out_dir": "res://lightmaps/",
 	"page_size": 1024,
 	"texel_size": 0.1,
 	"quality": 1, # LightmapGI BakeQuality: 0 Low, 1 Medium, 2 High, 3 Ultra
@@ -32,9 +31,10 @@ class Target:
 
 
 ## Bake `lm`'s scene. Returns OK or an error code; messages go to the editor log.
+## `save_path` is the .lmbake file to write (the page EXRs go beside it, named after it).
 ## `cancelled` (optional) is a single-element Array; set cancelled[0]=true to abort the
 ## bake — the running Blender process is killed and ERR_SKIP is returned.
-static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dictionary = {}, cancelled: Array = []) -> int:
+static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: String, opts: Dictionary = {}, cancelled: Array = []) -> int:
 	var cfg := DEFAULTS.duplicate()
 	for k in opts:
 		cfg[k] = opts[k]
@@ -104,9 +104,9 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 
 	# 4. run Blender headless: bake each mesh into its own EXR at its chunk size.
 	# Intermediates (per-mesh EXRs + baked.json + bake.log) go to the temp work dir; the
-	# final packed atlas + .lmbake go to the per-scene output folder (mirrors the scene's
-	# path under the base dir, so same-named scenes in different folders never collide).
-	var out_dir := _scene_bake_dir(root, cfg["out_dir"])
+	# final pages + .lmbake go beside the chosen save_path, named after it.
+	var out_dir := save_path.get_base_dir()
+	var base_name := save_path.get_file().get_basename()
 	# if the output folder is brand new, the EditorFileSystem doesn't know it yet, so we must
 	# scan (not reimport_files) to import the pages — tracked below to pick the right path.
 	var dir_was_new := not DirAccess.dir_exists_absolute(out_dir)
@@ -189,7 +189,7 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 	var efs := EditorInterface.get_resource_filesystem()
 	var page_paths := PackedStringArray()
 	for i in n_pages:
-		var pp := out_dir.path_join("%s_%d.exr" % [out_dir.get_file(), i])
+		var pp := out_dir.path_join("%s_%d.exr" % [base_name, i])
 		if (page_imgs[i] as Image).save_exr(pp) != OK:
 			push_error("pavlaka: failed to save lightmap page %s" % pp)
 			return ERR_CANT_CREATE
@@ -253,8 +253,8 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 			Rect2(r.position.x / ps, r.position.y / ps, r.size.x / ps, r.size.y / ps),
 			int(pl["page"]), -1)
 
-	# 9. save .lmbake (named after the scene, i.e. the output folder's leaf) and assign
-	var lmbake := out_dir.path_join("%s.lmbake" % out_dir.get_file())
+	# 9. save .lmbake (to the chosen save_path) and assign
+	var lmbake := save_path
 	err = ResourceSaver.save(data, lmbake)
 	if err != OK:
 		push_error("pavlaka: saving .lmbake failed (%d)" % err)
@@ -269,10 +269,9 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, opts: Dicti
 	RenderingServer.lightmap_set_probe_bounds(data.get_rid(), bounds)
 	if lm is LightmapBlenderGI:
 		(lm as LightmapBlenderGI).baked_bounds = bounds
-	# drop pages left by a denser previous bake (+ the pre-multi-page single atlas). Done
-	# last, after the new pages are imported — deleting tracked files mid-import corrupts the
-	# EditorFileSystem scan and the new pages fail to import.
-	_cleanup_stale_pages(out_dir, n_pages)
+	# drop pages left by a denser previous bake. Done last, after the new pages are imported —
+	# deleting tracked files mid-import corrupts the EditorFileSystem scan and they fail.
+	_cleanup_stale_pages(out_dir, base_name, n_pages)
 	var secs := (Time.get_ticks_msec() - bake_start) / 1000
 	var took := ("%d m %d s" % [secs / 60, secs % 60]) if secs >= 60 else ("%d s" % secs)
 	print("pavlaka: baked %d mesh(es) into %d page(s) of %dpx in %s -> %s"
@@ -298,19 +297,17 @@ static func _load_pages(paths: PackedStringArray) -> Array:
 	return texes
 
 
-# Remove page EXRs (+ .import) left by a previous, denser bake that needed more pages — and
-# the old single-atlas "<scene>.exr" from before multi-page — so the folder stays tidy.
-static func _cleanup_stale_pages(out_dir: String, n_pages: int) -> void:
-	var leaf := out_dir.get_file()
-	var stale := PackedStringArray([out_dir.path_join("%s.exr" % leaf)])
+# Remove page EXRs (+ .import) left by a previous, denser bake that needed more pages, so the
+# folder stays tidy (the new bake wrote pages 0..n_pages-1).
+static func _cleanup_stale_pages(out_dir: String, base_name: String, n_pages: int) -> void:
+	var stale := PackedStringArray()
 	var i := n_pages
-	while FileAccess.file_exists(out_dir.path_join("%s_%d.exr" % [leaf, i])):
-		stale.append(out_dir.path_join("%s_%d.exr" % [leaf, i]))
+	while FileAccess.file_exists(out_dir.path_join("%s_%d.exr" % [base_name, i])):
+		stale.append(out_dir.path_join("%s_%d.exr" % [base_name, i]))
 		i += 1
 	for p in stale:
-		if FileAccess.file_exists(p):
-			DirAccess.remove_absolute(ProjectSettings.globalize_path(p))
-			DirAccess.remove_absolute(ProjectSettings.globalize_path(p + ".import"))
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(p))
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(p + ".import"))
 
 
 static func _collect(node: Node, lm: LightmapGI, out: Array[Target]) -> void:
@@ -428,16 +425,6 @@ static func _samples_for_quality(q: int) -> int:
 		2: return 256   # High
 		3: return 512   # Ultra
 	return 128          # Medium (default)
-
-
-# Per-scene output folder under `base`, mirroring the scene's res:// path so same-named
-# scenes in different folders don't collide (e.g. res://a/level.tscn -> base/a/level).
-static func _scene_bake_dir(root: Node, base: String) -> String:
-	var scene_path := root.scene_file_path
-	if scene_path.is_empty():
-		push_warning("pavlaka: scene not saved — baking into a folder named after the root node; save the scene for stable, collision-free paths")
-		return base.path_join(String(root.name).validate_filename())
-	return base.path_join(scene_path.trim_prefix("res://").get_basename())
 
 
 static func _has_uv2(mesh: Mesh) -> bool:

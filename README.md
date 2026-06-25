@@ -11,17 +11,19 @@ is not a goal. The Blender side uses the long stable bake API and works on **Ble
 ## How it works
 
 ```
-LightmapBlenderGI node + "Bake with Blender"
+LightmapBlenderGI node + "Bake Lightmaps"
+  -> pack each mesh into atlas pages, sized by its world-space surface area
   -> export the scene's static meshes + lights to a temp glTF
   -> run Blender headless: Cycles bakes IRRADIANCE per mesh (Diffuse, Direct+Indirect,
-     Color OFF), denoised, to one linear EXR slice per mesh
-  -> import the slices as CompressedTexture2DArray
-  -> assemble a native LightmapGIData (one combined layered atlas) and assign it
-  -> save <scene>.lmbake; the scene renders with Godot's native LightmapGI runtime
+     Color OFF), denoised, each at its packed chunk size
+  -> composite the per-mesh bakes into the atlas pages, import as CompressedTexture2DArray
+  -> assemble a native LightmapGIData (pages as layers) and assign it
+  -> save the .lmbake (next to the scene by default); renders with Godot's LightmapGI runtime
 ```
 
-Godot owns the UV2; Blender bakes into it. Each mesh gets its own atlas slice and Godot
-combines them.
+Godot owns the UV2; Blender bakes into it. Meshes are packed into one or more atlas pages
+(area-proportional, like the native lightmapper), composited, and assigned as a single
+`LightmapGIData`.
 
 ## Requirements
 
@@ -55,8 +57,8 @@ combines them.
 
 | Group | Property | Meaning |
 |---|---|---|
-| Blender Bake | `output_dir` | Base dir for bake output (default `res://lightmaps`). Each bake writes to a per-scene subfolder mirroring the scene's path, so `res://levels/forest.tscn` goes to `res://lightmaps/levels/forest/` and same-named scenes in different folders never collide. Inside: one EXR per mesh named after the node, plus a `<scene>.lmbake`. |
-| Blender Bake | `atlas_size` | Per-mesh lightmap slice resolution. |
+| Blender Bake | `page_size` | Size (px) of each square atlas page. Meshes are packed across as many pages as needed (multi-page, like the native lightmapper). A mesh whose chunk can't fit one page is shrunk to fit and a warning is logged. |
+| Blender Bake | `texel_size` | World units per texel. Each mesh's lightmap chunk is sized `sqrt(world surface area) / texel_size`, so texel density is uniform across the scene (no stretching). Smaller = sharper / more texels / more pages. Tune to your scene's scale. |
 | Tweaks | `Quality` | LightmapGI's own Quality dropdown (Low/Medium/High/Ultra), mapped to Cycles samples (64/128/256/512; denoised afterward). |
 | Environment | `Mode` | LightmapGI's own Environment Mode, used for the bake's ambient and sky: **Disabled** (none), **Scene** (bake the scene's `WorldEnvironment` sky to a panorama), **Custom Sky** (bake a given `Sky`), **Custom Color** (flat color). |
 | Environment | `Custom Sky` / `Custom Color` / `Custom Energy` | Used by the Custom Sky and Custom Color modes (energy scales either). |
@@ -75,8 +77,10 @@ controlled by the parameters above.
 - **Sky rotation isn't applied.** A baked `WorldEnvironment` sky ignores Godot's
   `sky_rotation` (negligible for low frequency ambient and AO; get direct sun from a
   Static `DirectionalLight3D`, not the sky).
-- **One slice per mesh.** There is no space efficient atlas packing yet, and every mesh
-  gets a full resolution slice regardless of size (Texture2DArray layers share dimensions).
+- **Very large meshes get shrunk, not split.** A mesh whose lightmap chunk can't fit one
+  `page_size` page is scaled down to fit (lower density there) and a warning names it.
+  Unlike the native lightmapper this never aborts the bake, but for best quality split the
+  mesh, raise `page_size`, or raise `texel_size`.
 
 See **[RESEARCH.md](RESEARCH.md)** for the design, the Godot 4.7 source findings, the
 data contract, and the pitfalls discovered while building this.

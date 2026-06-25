@@ -10,8 +10,6 @@ extends LightmapGI
 ## "Blender Bake" parameters below.
 
 @export_group("Blender Bake")
-## Where the baked .lmbake and EXR slices are written.
-@export_dir var output_dir: String = "res://lightmaps"
 ## Size (px) of each square atlas page. Meshes are packed across as many pages as needed
 ## (multi-page, like the native lightmapper). A mesh whose chunk can't fit one page is
 ## shrunk to fit and a warning is logged.
@@ -36,7 +34,6 @@ extends LightmapGI
 
 func get_bake_opts() -> Dictionary:
 	return {
-		"out_dir": output_dir,
 		"page_size": page_size,
 		"texel_size": texel_size,
 		"quality": quality, # inherited LightmapGI property; mapped to samples in the baker

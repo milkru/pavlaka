@@ -324,6 +324,19 @@ func _on_bake_pressed() -> void:
 		push_error("pavlaka: Blender not found at '%s' — fix Project Settings → pavlaka/blender_path" % blender)
 		return
 
+	# Resolve where to save the .lmbake, like native LightmapGI: reuse the existing path if
+	# this node was already baked; otherwise prompt with a file dialog defaulting to next to
+	# the scene. An unsaved scene has no default location, so it must be prompted.
+	var save_path := ""
+	var data: LightmapGIData = _current.light_data
+	if data != null and data.resource_path.begins_with("res://"):
+		save_path = data.resource_path
+	else:
+		var default_path := _default_lmbake_path(root)
+		save_path = await _prompt_save_path(default_path)
+		if save_path.is_empty():
+			return # cancelled
+
 	# Show the inline progress strip in the toolbar (in place of the bake button). It stays
 	# visible regardless of selection while baking; the editor remains fully usable since the
 	# bake runs non-blocking.
@@ -339,12 +352,40 @@ func _on_bake_pressed() -> void:
 	if _progress_timer:
 		_progress_timer.start()
 
-	await PavlakaBaker.bake(root, _current, blender, _current.get_bake_opts(), _cancelled)
+	await PavlakaBaker.bake(root, _current, blender, save_path, _current.get_bake_opts(), _cancelled)
 
 	if _progress_timer:
 		_progress_timer.stop()
 	_baking = false
 	_update_button()
+
+
+# Default .lmbake path: next to the scene, named after it (matches native LightmapGI).
+# Returns "" if the scene isn't saved (no stable location to default to).
+func _default_lmbake_path(root: Node) -> String:
+	var scene := root.scene_file_path
+	if scene.is_empty():
+		return ""
+	return scene.get_basename() + ".lmbake"
+
+
+# Pop an EditorFileDialog to choose the .lmbake save path (location + name). Returns the
+# chosen res:// path, or "" if cancelled. Awaits the dialog.
+func _prompt_save_path(default_path: String) -> String:
+	var dlg := EditorFileDialog.new()
+	dlg.file_mode = EditorFileDialog.FILE_MODE_SAVE_FILE
+	dlg.access = EditorFileDialog.ACCESS_RESOURCES
+	dlg.title = "Save Lightmap Bake"
+	dlg.add_filter("*.lmbake", "Lightmap Bake")
+	if not default_path.is_empty():
+		dlg.current_path = default_path
+	EditorInterface.get_base_control().add_child(dlg)
+	dlg.popup_file_dialog()
+	var chosen := [""]
+	dlg.file_selected.connect(func(p: String): chosen[0] = p)
+	await dlg.visibility_changed # fires when the dialog closes (selected or cancelled)
+	dlg.queue_free()
+	return chosen[0]
 
 
 # ---- headless self-test ----------------------------------------------------
@@ -390,7 +431,7 @@ func _autobake() -> void:
 	var lm := LightmapBlenderGI.new(); lm.name = "LightmapBlenderGI"
 	root.add_child(lm); lm.owner = root
 
-	var err: int = await PavlakaBaker.bake(root, lm, _blender_path(), lm.get_bake_opts())
+	var err: int = await PavlakaBaker.bake(root, lm, _blender_path(), "res://lightmaps/BakeScene/BakeScene.lmbake", lm.get_bake_opts())
 	print("PAVLAKA_AUTO: bake err=", err,
 		" users=", lm.light_data.get_user_count() if lm.light_data else -1,
 		" textures=", lm.light_data.get_lightmap_textures().size() if lm.light_data else -1)
