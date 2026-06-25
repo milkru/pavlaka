@@ -148,7 +148,12 @@ func _logo(px: int) -> Texture2D:
 # build the inline progress strip ([logo] Baking… Ns [Cancel]); hidden until a bake starts
 func _build_progress_strip() -> void:
 	_progress = HBoxContainer.new()
-	_progress.add_theme_constant_override("separation", 6)
+	# use the bake button's own icon-text gap so the strip's logo-text spacing matches it
+	var hsep := 4
+	var bt := EditorInterface.get_editor_theme()
+	if bt != null and bt.has_constant("h_separation", "Button"):
+		hsep = bt.get_constant("h_separation", "Button")
+	_progress.add_theme_constant_override("separation", hsep)
 	# match the bake button's height exactly (it's theme/DPI dependent, so read it, don't
 	# hardcode); _btn is already created and themed by the time we build the strip
 	var row_h := _btn.get_combined_minimum_size().y if _btn else 0.0
@@ -161,11 +166,9 @@ func _build_progress_strip() -> void:
 	var icon_px := int(round(16.0 * EditorInterface.get_editor_scale())) # match the bake button's icon
 	var logo := _logo(icon_px) # rasterized from the SVG at exactly this size
 	if logo != null:
+		# draw at the texture's native size (16px), centered — same as the button's icon
 		var icon := TextureRect.new()
 		icon.texture = logo
-		icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		icon.custom_minimum_size = Vector2(icon_px, icon_px)
 		icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		_progress.add_child(icon)
 	_progress_label = Label.new()
