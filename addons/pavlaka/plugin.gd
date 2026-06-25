@@ -141,6 +141,18 @@ func _set_window_icon(dlg: Window) -> void:
 		DisplayServer.window_set_icon(img, dlg.get_window_id())
 
 
+# Load an image shipped in the addon as a Texture2D, straight from disk (no import
+# dependency). Returns null if the file is missing or can't be decoded.
+func _load_addon_texture(rel_path: String) -> Texture2D:
+	var p := (get_script() as Script).resource_path.get_base_dir().path_join(rel_path)
+	if not FileAccess.file_exists(p):
+		return null
+	var img := Image.load_from_file(p)
+	if img == null:
+		return null
+	return ImageTexture.create_from_image(img)
+
+
 # re-hide the built-in bake button whenever it reappears while our node is selected
 func _on_builtin_vis() -> void:
 	if _current != null and _builtin_btn != null and _builtin_btn.visible:
@@ -222,41 +234,76 @@ func _on_bake_pressed() -> void:
 	_baking = true
 	_update_button()
 
-	# progress dialog so the editor shows feedback instead of appearing frozen.
-	# NON-exclusive: an exclusive popup force-closes the editor's own reimport
-	# ProgressDialog during the import phase, corrupting its task list and crashing
-	# (progress_dialog.cpp). We also hide our dialog before the import stage so it never
-	# overlaps the editor's reimport progress.
+	# progress dialog so the editor shows feedback instead of appearing frozen. Forced
+	# NON-exclusive (AcceptDialog defaults to exclusive): an exclusive popup collides with
+	# the editor's reimport ProgressDialog during import and crashes (progress_dialog.cpp).
+	# Non-exclusive lets both coexist, so the spinner can stay up through the whole bake.
 	var cancelled := [false]
 	var dlg := AcceptDialog.new()
+	dlg.exclusive = false
 	dlg.title = "Bake with Blender"
 	dlg.get_ok_button().hide()
 	dlg.unresizable = true
-	dlg.min_size = Vector2i(420, 0)
+	dlg.min_size = Vector2i(300, 0)
 
 	var margin := MarginContainer.new()
 	for side in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
 		margin.add_theme_constant_override(side, 18)
 	var vb := VBoxContainer.new()
 	vb.add_theme_constant_override("separation", 12)
+
+	# Blender logo banner, scaled down from the 1800x550 lockup (loaded from disk, no import)
+	var logo := TextureRect.new()
+	var logo_tex := _load_addon_texture("blender_logo_kit/blender_logo_socket.png")
+	if logo_tex != null:
+		logo.texture = logo_tex
+	logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	logo.custom_minimum_size = Vector2(190, 58)
+	logo.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+
 	var heading := Label.new()
-	heading.text = "Baking lightmaps"
+	heading.text = "Bake with Blender Cycles"
 	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	heading.add_theme_font_size_override("font_size", 15)
-	var bar := ProgressBar.new()
-	bar.indeterminate = true
-	bar.editor_preview_indeterminate = true
-	bar.show_percentage = false
-	bar.custom_minimum_size = Vector2(0, 6)
+
+	# spinner (a rotating Reload icon) + status line "In the oven…  Ns"
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 8)
+	var spin := TextureRect.new()
+	var th := EditorInterface.get_editor_theme()
+	if th != null and th.has_icon("Reload", "EditorIcons"):
+		spin.texture = th.get_icon("Reload", "EditorIcons")
+	spin.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	spin.custom_minimum_size = Vector2(18, 18)
+	spin.pivot_offset = Vector2(9, 9) # rotate around its center
 	var status := Label.new()
-	status.text = "Starting…"
-	status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	status.modulate = Color(1, 1, 1, 0.6)
+	status.text = "In the oven…  0 s"
+	status.modulate = Color(1, 1, 1, 0.85)
+	row.add_child(spin)
+	row.add_child(status)
+
+	vb.add_child(logo)
 	vb.add_child(heading)
-	vb.add_child(bar)
-	vb.add_child(status)
+	vb.add_child(row)
 	margin.add_child(vb)
 	dlg.add_child(margin)
+
+	# tick elapsed seconds into the status line (rendering dominates, so a single running
+	# counter is more useful than per-stage labels)
+	var start_ms := Time.get_ticks_msec()
+	var tick := func():
+		if not is_instance_valid(status):
+			return
+		if not cancelled.is_empty() and cancelled[0]:
+			status.text = "Cancelling…"
+		else:
+			status.text = "In the oven…  %d s" % ((Time.get_ticks_msec() - start_ms) / 1000)
+	var timer := Timer.new()
+	timer.wait_time = 1.0
+	timer.autostart = true
+	timer.timeout.connect(tick)
+	dlg.add_child(timer)
 
 	var on_cancel := func():
 		cancelled[0] = true
@@ -267,15 +314,13 @@ func _on_bake_pressed() -> void:
 	EditorInterface.get_base_control().add_child(dlg)
 	dlg.popup_centered()
 	_set_window_icon(dlg)
-	var progress := func(msg: String):
-		if not is_instance_valid(dlg):
-			return
-		if msg.begins_with("Importing"):
-			dlg.hide() # let the editor's reimport progress dialog have the stage
-		elif is_instance_valid(status):
-			status.text = msg
 
-	var err: int = await PavlakaBaker.bake(root, _current, blender, _current.get_bake_opts(), progress, cancelled)
+	# spin the icon continuously (tween must be created once the node is in the tree)
+	if spin.texture != null:
+		var tw := spin.create_tween().set_loops()
+		tw.tween_property(spin, "rotation", TAU, 1.2).from(0.0)
+
+	var err: int = await PavlakaBaker.bake(root, _current, blender, _current.get_bake_opts(), Callable(), cancelled)
 
 	if is_instance_valid(dlg):
 		dlg.queue_free()
