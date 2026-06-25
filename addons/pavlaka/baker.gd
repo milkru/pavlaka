@@ -18,6 +18,7 @@ const BASE_DENSITY := 10.0
 const DEFAULTS := {
 	"max_texture_size": 16384, # LightmapGI's own cap on each atlas page's dimensions
 	"texel_scale": 1.0, # LightmapGI's density multiplier (higher = sharper / more texels)
+	"compress": false, # VRAM-compress pages (smaller, POT-rounded) vs lossless exact-fit
 	"quality": 1, # LightmapGI BakeQuality: 0 Low, 1 Medium, 2 High, 3 Ultra
 	"light_energy_scale": 1.0,
 	"environment_mode": 1, # SCENE
@@ -199,7 +200,7 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 		if (page_imgs[i] as Image).save_exr(pp) != OK:
 			push_error("pavlaka: failed to save lightmap page %s" % pp)
 			return ERR_CANT_CREATE
-		_write_exr_import(pp)
+		_write_exr_import(pp, bool(cfg["compress"]))
 		efs.update_file(pp)
 		page_paths.append(pp)
 	var page_texes: Array = []
@@ -581,11 +582,11 @@ static func _find(targets: Array[Target], mesh_name: String) -> Target:
 
 # Write the page's .import preset, preserving an existing UID line (so re-bakes keep stable
 # UIDs that scenes/.lmbake reference) while still updating the params.
-# compress/mode=0 (lossless), NOT VRAM-compressed: VRAM compression rounds the texture up to
-# the next power of two (e.g. 1536 -> 2048, 2049 -> 4096), which both wastes atlas space (black
-# padding) and can blow past Max Texture Size. Lossless keeps the page at its exact content-fit
-# dimensions (and avoids BC6H banding on HDR lightmaps).
-static func _write_exr_import(exr_res_path: String) -> void:
+# compress=false -> mode=0 (lossless): the page keeps its exact content-fit dimensions and
+# respects Max Texture Size. compress=true -> mode=2 (VRAM/BC6H): ~4x smaller VRAM, but the
+# importer rounds the texture up to a power of two (wasted space, and a page may exceed Max
+# Texture Size) and HDR compression can band slightly.
+static func _write_exr_import(exr_res_path: String, compress: bool) -> void:
 	var uid_line := ""
 	if FileAccess.file_exists(exr_res_path + ".import"):
 		for line in FileAccess.get_file_as_string(exr_res_path + ".import").split("\n"):
@@ -600,10 +601,10 @@ type="CompressedTexture2DArray"%s
 
 [params]
 
-compress/mode=0
+compress/mode=%d
 compress/channel_pack=1
 mipmaps/generate=false
 slices/horizontal=1
 slices/vertical=1
-""" % uid_line)
+""" % [uid_line, 2 if compress else 0])
 	f.close()

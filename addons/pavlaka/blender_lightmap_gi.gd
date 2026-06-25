@@ -25,6 +25,13 @@ extends LightmapGI
 # own too; we keep it visible and read it in the baker. Mode: 0 Disabled, 1 Scene, 2 Custom
 # Sky, 3 Custom Color.
 
+@export_group("Blender Bake")
+## Compress the baked lightmap textures (VRAM compression, ~4x smaller GPU memory). When OFF
+## (default), pages are lossless and kept at their exact content-fit size. When ON, textures
+## are rounded up to a power of two (some wasted space, and a page may exceed Max Texture Size),
+## and HDR compression (BC6H) can introduce slight banding — but uses far less VRAM.
+@export var compress_lightmaps: bool = false
+
 @export_group("Lights")
 ## Multiplier applied to each Static light's own energy during the bake. Only lights with
 ## Bake Mode = Static contribute; their actual energy and color are used (×this scale).
@@ -37,6 +44,7 @@ func get_bake_opts() -> Dictionary:
 		"max_texture_size": max_texture_size, # inherited LightmapGI property; caps page size
 		"texel_scale": texel_scale, # inherited LightmapGI property; density multiplier
 		"quality": quality, # inherited LightmapGI property; mapped to samples in the baker
+		"compress": compress_lightmaps,
 		"light_energy_scale": light_energy_scale,
 		# these are LightmapGI's own inherited Environment properties
 		"environment_mode": environment_mode,
