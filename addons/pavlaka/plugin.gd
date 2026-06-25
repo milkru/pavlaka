@@ -219,15 +219,15 @@ func _on_bake_pressed() -> void:
 	dlg.title = "Bake with Blender"
 	dlg.get_ok_button().hide()
 	dlg.unresizable = true
-	dlg.min_size = Vector2i(500, 0)
+	dlg.min_size = Vector2i(625, 0) # 1.25x wider, to match the default bake popup's width
 
 	var margin := MarginContainer.new()
 	margin.add_theme_constant_override("margin_left", 18)
 	margin.add_theme_constant_override("margin_right", 18)
-	margin.add_theme_constant_override("margin_top", 16)
-	margin.add_theme_constant_override("margin_bottom", 16)
+	margin.add_theme_constant_override("margin_top", 10)
+	margin.add_theme_constant_override("margin_bottom", 10)
 	var vb := VBoxContainer.new()
-	vb.add_theme_constant_override("separation", 12)
+	vb.add_theme_constant_override("separation", 6) # tightened so the height matches too
 
 	var ed_theme := EditorInterface.get_editor_theme()
 
@@ -246,7 +246,7 @@ func _on_bake_pressed() -> void:
 	bar.editor_preview_indeterminate = true
 	bar.show_percentage = false
 	bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	bar.custom_minimum_size = Vector2(0, 28)
+	bar.custom_minimum_size = Vector2(0, 22)
 
 	var status := Label.new()
 	status.text = "In the oven…  0 s"
