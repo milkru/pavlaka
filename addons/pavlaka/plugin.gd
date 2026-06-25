@@ -231,56 +231,37 @@ func _on_bake_pressed() -> void:
 	# progress dialog so the editor shows feedback instead of appearing frozen. Forced
 	# NON-exclusive (AcceptDialog defaults to exclusive): an exclusive popup collides with
 	# the editor's reimport ProgressDialog during import and crashes (progress_dialog.cpp).
-	# Non-exclusive lets both coexist, so the spinner can stay up through the whole bake.
+	# Non-exclusive lets both coexist, so the bar can stay up through the whole bake.
 	var cancelled := [false]
 	var dlg := AcceptDialog.new()
 	dlg.exclusive = false
 	dlg.title = "Bake with Blender"
 	dlg.get_ok_button().hide()
 	dlg.unresizable = true
-	dlg.min_size = Vector2i(300, 0)
+	dlg.min_size = Vector2i(360, 0)
 
 	var margin := MarginContainer.new()
 	for side in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
-		margin.add_theme_constant_override(side, 18)
+		margin.add_theme_constant_override(side, 14)
 	var vb := VBoxContainer.new()
-	vb.add_theme_constant_override("separation", 14)
+	vb.add_theme_constant_override("separation", 8)
 
-	# spinner (a rotating Reload icon) + status line "In the oven…  Ns", right-aligned
-	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_END
-	row.add_theme_constant_override("separation", 8)
-	var spin := TextureRect.new()
-	var th := EditorInterface.get_editor_theme()
-	if th != null and th.has_icon("Reload", "EditorIcons"):
-		spin.texture = th.get_icon("Reload", "EditorIcons")
-	spin.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	spin.custom_minimum_size = Vector2(18, 18)
-	spin.pivot_offset = Vector2(9, 9) # rotate around its center
+	# indeterminate (cycling) bar — we can't know Blender's progress — over an elapsed line
+	var bar := ProgressBar.new()
+	bar.indeterminate = true
+	bar.editor_preview_indeterminate = true
+	bar.show_percentage = false
+	bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
 	var status := Label.new()
 	status.text = "In the oven…  0 s"
-	status.modulate = Color(1, 1, 1, 0.85)
-	row.add_child(spin)
-	row.add_child(status)
 
-	# small Blender logo tucked into the lower-right. EXPAND_IGNORE_SIZE so the TextureRect
-	# doesn't inherit the texture's full 1800x550 size; custom_minimum_size then controls it.
-	var logo := TextureRect.new()
-	var logo_tex := _load_addon_texture("blender_logo_kit/blender_logo_socket.png")
-	if logo_tex != null:
-		logo.texture = logo_tex
-	logo.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT
-	logo.custom_minimum_size = Vector2(120, 37)
-	logo.size_flags_horizontal = Control.SIZE_SHRINK_END # pin to the right
-
-	vb.add_child(row)
-	vb.add_child(logo)
+	vb.add_child(bar)
+	vb.add_child(status)
 	margin.add_child(vb)
 	dlg.add_child(margin)
 
-	# tick elapsed seconds into the status line (rendering dominates, so a single running
-	# counter is more useful than per-stage labels)
+	# tick elapsed seconds into the status line
 	var start_ms := Time.get_ticks_msec()
 	var tick := func():
 		if not is_instance_valid(status):
@@ -304,11 +285,6 @@ func _on_bake_pressed() -> void:
 	EditorInterface.get_base_control().add_child(dlg)
 	dlg.popup_centered()
 	_set_window_icon(dlg)
-
-	# spin the icon continuously (tween must be created once the node is in the tree)
-	if spin.texture != null:
-		var tw := spin.create_tween().set_loops()
-		tw.tween_property(spin, "rotation", TAU, 1.2).from(0.0)
 
 	var err: int = await PavlakaBaker.bake(root, _current, blender, _current.get_bake_opts(), Callable(), cancelled)
 
