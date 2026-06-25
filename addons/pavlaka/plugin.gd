@@ -50,9 +50,11 @@ func _enter_tree() -> void:
 	_btn = Button.new()
 	_btn.text = "Bake with Blender"
 	_btn.pressed.connect(_on_bake_pressed)
-	var icon_path := (get_script() as Script).resource_path.get_base_dir().path_join("blender_icon.png")
-	if ResourceLoader.exists(icon_path):
-		_btn.icon = load(icon_path)
+	# the button draws its icon at native size, so use the logo asset matching the editor's
+	# toolbar icon size (16px x editor scale): 16 at 100%, 32 at 200%, etc.
+	var logo := _logo(int(round(16.0 * EditorInterface.get_editor_scale())))
+	if logo != null:
+		_btn.icon = logo
 	else:
 		var theme := EditorInterface.get_editor_theme()
 		if theme != null and theme.has_icon("Bake", "EditorIcons"):
@@ -126,6 +128,22 @@ func _update_button() -> void:
 	_btn.tooltip_text = "" if path_ok else "Set the Blender path in Project Settings → pavlaka/blender_path"
 
 
+# square Blender logo sizes available under logos/
+const _LOGO_SIZES := [16, 32, 64, 128, 256, 512, 1024]
+
+
+# Load the Blender logo at the available size nearest target_px (no resizing — we ship the
+# exact sizes under logos/). Returns null if the folder is missing.
+func _logo(target_px: int) -> Texture2D:
+	var best := _LOGO_SIZES[0]
+	for s in _LOGO_SIZES:
+		if absi(s - target_px) < absi(best - target_px):
+			best = s
+	var p := (get_script() as Script).resource_path.get_base_dir().path_join(
+		"logos/blender_icon_%dx%d.png" % [best, best])
+	return load(p) as Texture2D if ResourceLoader.exists(p) else null
+
+
 # build the inline progress strip ([logo] Baking… Ns [Cancel]); hidden until a bake starts
 func _build_progress_strip() -> void:
 	_progress = HBoxContainer.new()
@@ -139,13 +157,14 @@ func _build_progress_strip() -> void:
 	var lead := Control.new()
 	lead.custom_minimum_size = Vector2(6, 0)
 	_progress.add_child(lead)
-	var icon_path := (get_script() as Script).resource_path.get_base_dir().path_join("blender_icon.png")
-	if ResourceLoader.exists(icon_path):
+	var strip_h := int(round(18.0 * EditorInterface.get_editor_scale()))
+	var logo := _logo(strip_h * 2) # a TextureRect scales, so feed 2x for a crisp downscale
+	if logo != null:
 		var icon := TextureRect.new()
-		icon.texture = load(icon_path)
+		icon.texture = logo
 		icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		icon.custom_minimum_size = Vector2(18, 18)
+		icon.custom_minimum_size = Vector2(strip_h, strip_h)
 		icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		_progress.add_child(icon)
 	_progress_label = Label.new()

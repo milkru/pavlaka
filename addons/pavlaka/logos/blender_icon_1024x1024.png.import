@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://dem6p67rdluat"
-path="res://.godot/imported/blender_icon.png-913835f93cb7765c061896e7eabc437b.ctex"
+uid="uid://cd6kcup3habik"
+path="res://.godot/imported/blender_icon_1024x1024.png-6c7e3e6e820d355c533854e72545d408.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://addons/pavlaka/blender_icon.png"
-dest_files=["res://.godot/imported/blender_icon.png-913835f93cb7765c061896e7eabc437b.ctex"]
+source_file="res://addons/pavlaka/logos/blender_icon_1024x1024.png"
+dest_files=["res://.godot/imported/blender_icon_1024x1024.png-6c7e3e6e820d355c533854e72545d408.ctex"]
 
 [params]
 
