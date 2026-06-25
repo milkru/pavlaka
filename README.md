@@ -33,8 +33,9 @@ combines them.
 
 1. Copy the `addons/pavlaka/` folder into your project's `addons/`.
 2. **Project → Project Settings → Plugins** → enable **pavlaka**.
-3. **Project Settings → search "pavlaka"** → set **`blender_path`** to your Blender
-   executable (e.g. `C:/Program Files/Blender Foundation/Blender 4.1/blender.exe`).
+3. On enable it **auto-detects Blender** and sets **Project Settings → `pavlaka/blender_path`**.
+   Only change it (Project Settings → search "pavlaka") if detection failed or you want a
+   specific Blender version.
 
 ## Usage
 
@@ -42,8 +43,9 @@ combines them.
 2. Make sure your static meshes have **UV2**. For imported meshes: Import dock →
    **Meshes → Light Baking = "Static Lightmaps"** → Reimport (Godot generates UV2 and
    marks them static). Meshes without UV2 are skipped.
-3. Add at least one light (e.g. `DirectionalLight3D`), or rely on the ambient dome for a
-   pure ambient-occlusion bake.
+3. Add at least one light and set its **Bake Mode = Static** (only Static lights are
+   baked), or rely on the Environment (scene sky / Custom Color) for an ambient-occlusion
+   bake.
 4. Select the `LightmapBlenderGI` and press **Bake with Blender** in the 3D toolbar.
    A progress dialog shows the stages; **Cancel** aborts the running bake.
 5. After baking, **disable or hide the real-time lights** you baked, otherwise they
@@ -65,13 +67,18 @@ controlled by the parameters above.
 
 ## Limitations / notes
 
-- **Bake brightness isn't calibrated** to Godot's light units yet: sun lights use the
-  fixed `sun_energy` rather than each light's own intensity.
-- **Ambient** is a flat dome color, not your scene's `WorldEnvironment` sky.
-- **One slice per mesh** — no space-efficient atlas packing yet (Texture2DArray layers
-  share dimensions).
-- Baking is a **GUI-editor** action (it relies on the editor filesystem to import the
-  result), not a headless/CI operation.
+- **Brightness matching isn't automatic.** Each Static light's real energy/color is used,
+  but Godot's energy is dimensionless while Cycles uses physical units, so absolute
+  brightness may not match the viewport — tune `light_energy_scale`. **Point/spot** lights
+  match least well (Cycles' inverse-square falloff differs from Godot's model); directional
+  is the well-behaved case.
+- **Sky rotation isn't applied.** A baked `WorldEnvironment` sky ignores Godot's
+  `sky_rotation` (negligible for low-frequency ambient/AO; get direct sun from a Static
+  `DirectionalLight3D`, not the sky).
+- **One slice per mesh** — no space-efficient atlas packing yet, and every mesh gets a
+  full-resolution slice regardless of size (Texture2DArray layers share dimensions).
+- **GUI-editor only** — baking relies on the editor filesystem to import the result, so
+  it's not a headless/CI operation.
 - The button-hiding of the built-in "Bake Lightmaps" matches the English label.
 
 See **[RESEARCH.md](RESEARCH.md)** for the design, the Godot 4.7 source findings, the
