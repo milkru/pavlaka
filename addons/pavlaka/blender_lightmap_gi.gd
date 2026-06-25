@@ -9,21 +9,17 @@ extends LightmapGI
 ## settings (Quality, Bounces, Denoiser, etc.) are NOT used; baking is driven by the
 ## "Blender Bake" parameters below.
 
-@export_group("Blender Bake")
-## Size (px) of each square atlas page. Meshes are packed across as many pages as needed
-## (multi-page, like the native lightmapper). A mesh whose chunk can't fit one page is
-## shrunk to fit and a warning is logged.
-@export var page_size: int = 1024
-# Texel density is controlled by LightmapGI's own inherited "texel_scale" property (kept
-# visible via _validate_property): each mesh's lightmap chunk is sized
-# sqrt(world surface area) * BASE_DENSITY * texel_scale, so density is uniform across the
-# scene (no stretching). Higher texel_scale = sharper / more texels / more pages.
-# Quality (Low/Medium/High/Ultra) reuses LightmapGI's own inherited "quality" property and
-# maps to Cycles samples in the baker (see _validate_property / get_bake_opts).
-
-# NOTE: the Environment section (Mode / Custom Sky / Custom Color / Custom Energy) is
-# LightmapGI's own — we don't redefine it, just keep it visible (see _validate_property)
-# and read it in the baker. Mode values: 0 Disabled, 1 Scene, 2 Custom Sky, 3 Custom Color.
+# Bake sizing reuses LightmapGI's own inherited properties (kept visible via
+# _validate_property), so they appear under Tweaks like native:
+#  - max_texture_size: caps each atlas page's dimensions. Pages grow to fit their content but
+#    never exceed this, opening a new page when they would (multi-page like the native baker).
+#  - texel_scale: density multiplier. Each mesh's lightmap chunk is sized
+#    sqrt(world surface area) * BASE_DENSITY * texel_scale, so density is uniform across the
+#    scene (no stretching). Higher = sharper / more texels / more pages.
+#  - quality (Low/Medium/High/Ultra): maps to Cycles samples in the baker.
+# The Environment section (Mode / Custom Sky / Custom Color / Custom Energy) is LightmapGI's
+# own too; we keep it visible and read it in the baker. Mode: 0 Disabled, 1 Scene, 2 Custom
+# Sky, 3 Custom Color.
 
 @export_group("Lights")
 ## Multiplier applied to each Static light's own energy during the bake. Only lights with
@@ -34,7 +30,7 @@ extends LightmapGI
 
 func get_bake_opts() -> Dictionary:
 	return {
-		"page_size": page_size,
+		"max_texture_size": max_texture_size, # inherited LightmapGI property; caps page size
 		"texel_scale": texel_scale, # inherited LightmapGI property; density multiplier
 		"quality": quality, # inherited LightmapGI property; mapped to samples in the baker
 		"light_energy_scale": light_energy_scale,
@@ -73,7 +69,7 @@ var _inherited_props: Dictionary = {}
 # reuse), the Quality dropdown, and the Data > Light Data slot (the baked .lmbake, shown like
 # native so it can be inspected/cleared). "Data" is the group header for light_data.
 const _KEEP_VISIBLE := {
-	"quality": true, "texel_scale": true,
+	"quality": true, "texel_scale": true, "max_texture_size": true,
 	"environment_mode": true, "environment_custom_sky": true,
 	"environment_custom_color": true, "environment_custom_energy": true,
 	"Data": true, "light_data": true,

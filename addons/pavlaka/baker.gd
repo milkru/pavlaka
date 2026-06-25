@@ -16,7 +16,7 @@ const BAKE_SCRIPT := "res://addons/pavlaka/bake.py"
 const BASE_DENSITY := 10.0
 
 const DEFAULTS := {
-	"page_size": 1024,
+	"max_texture_size": 16384, # LightmapGI's own cap on each atlas page's dimensions
 	"texel_scale": 1.0, # LightmapGI's density multiplier (higher = sharper / more texels)
 	"quality": 1, # LightmapGI BakeQuality: 0 Low, 1 Medium, 2 High, 3 Ultra
 	"light_energy_scale": 1.0,
@@ -58,21 +58,23 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 		targets.map(func(t): return t.name)])
 
 	# 2. pack the atlas pages: each mesh gets a square chunk sized by its world-space surface
-	# area at the chosen texel density, shelf-packed into page_size² pages (see _pack_pages).
-	# Done before baking so each mesh can be baked at its exact chunk size.
-	var page_size := int(cfg["page_size"])
-	var pack := _pack_pages(targets, page_size, float(cfg["texel_scale"]))
-	var n_pages: int = pack["pages"]
+	# area at the chosen texel density, shelf-packed into pages that grow to fit but never
+	# exceed max_texture_size (see _pack_pages). Done before baking so each mesh can be baked
+	# at its exact chunk size.
+	var max_tex := int(cfg["max_texture_size"])
+	var pack := _pack_pages(targets, max_tex, float(cfg["texel_scale"]))
+	var page_dims: Array = pack["page_dims"] # Vector2i per page
+	var n_pages: int = page_dims.size()
 	var placements: Array = pack["placements"] # {page, rect}, aligned with `targets`
 	if n_pages == 0:
 		push_error("pavlaka: targets have zero surface area; nothing to bake")
 		return ERR_INVALID_DATA
 	for nm in pack["fallbacks"]:
 		push_warning(("pavlaka: mesh '%s' is too large to fit a %dpx page at texel_scale %.3f; "
-			+ "its lightmap was shrunk to fit (lower density there). Split the mesh, increase "
-			+ "page_size, or lower texel_scale.") % [nm, page_size, float(cfg["texel_scale"])])
+			+ "its lightmap was shrunk to fit (lower density there). Split the mesh, raise "
+			+ "Max Texture Size, or lower texel_scale.") % [nm, max_tex, float(cfg["texel_scale"])])
 	if n_pages > 8:
-		push_warning("pavlaka: bake uses %d atlas pages — lower texel_scale for fewer/lower-res pages if VRAM is a concern" % n_pages)
+		push_warning("pavlaka: bake uses %d atlas pages — lower texel_scale for fewer pages if VRAM is a concern" % n_pages)
 	var place_by_name := {}
 	var size_by_name := {}
 	for i in targets.size():
@@ -169,8 +171,9 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 	# 6. composite the per-mesh EXRs into the atlas pages (HDR/linear), blitting each into its
 	# chunk on its assigned page. A gutter was reserved during packing so meshes can't bleed.
 	var page_imgs: Array = []
-	for _i in n_pages:
-		page_imgs.append(Image.create(page_size, page_size, false, Image.FORMAT_RGBAF))
+	for i in n_pages:
+		var d: Vector2i = page_dims[i]
+		page_imgs.append(Image.create(d.x, d.y, false, Image.FORMAT_RGBAF))
 	for m in baked_meshes:
 		var nm: String = m["name"]
 		if not place_by_name.has(nm):
@@ -244,7 +247,6 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 		"baked_exposure": float(meta.get("baked_exposure", 1.0)),
 		"lightprobe_hash": 0,
 	})
-	var ps := float(page_size)
 	for m in baked_meshes:
 		var nm: String = m["name"]
 		var t := _find(targets, nm)
@@ -252,8 +254,11 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 			continue
 		var pl: Dictionary = place_by_name[nm]
 		var r: Rect2i = pl["rect"]
+		# normalize the chunk rect by its own page's dimensions (pages can differ in size)
+		var d: Vector2i = page_dims[pl["page"]]
 		data.add_user(t.path,
-			Rect2(r.position.x / ps, r.position.y / ps, r.size.x / ps, r.size.y / ps),
+			Rect2(float(r.position.x) / d.x, float(r.position.y) / d.y,
+				float(r.size.x) / d.x, float(r.size.y) / d.y),
 			int(pl["page"]), -1)
 
 	# 9. save .lmbake (to the chosen save_path) and assign
@@ -277,8 +282,9 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 	_cleanup_stale_pages(out_dir, base_name, n_pages)
 	var secs := (Time.get_ticks_msec() - bake_start) / 1000
 	var took := ("%d m %d s" % [secs / 60, secs % 60]) if secs >= 60 else ("%d s" % secs)
-	print("pavlaka: baked %d mesh(es) into %d page(s) of %dpx in %s -> %s"
-		% [data.get_user_count(), n_pages, page_size, took, lmbake])
+	var dims_str := ", ".join((page_dims as Array).map(func(d): return "%dx%d" % [d.x, d.y]))
+	print("pavlaka: baked %d mesh(es) into %d page(s) [%s] in %s -> %s"
+		% [data.get_user_count(), n_pages, dims_str, took, lmbake])
 	return OK
 
 
@@ -471,14 +477,17 @@ static func _world_surface_area(mi: MeshInstance3D) -> float:
 	return area
 
 
-# Pack the targets into fixed-size atlas pages at a uniform texel density (no stretching).
-# Each mesh's square chunk side = sqrt(world area) * BASE_DENSITY * texel_scale (px); chunks
-# are shelf-packed into page_size² pages, opening new pages as needed (multi-page like the
-# native lightmapper). A mesh whose chunk can't fit one page is shrunk to fit and its name
-# returned in "fallbacks". Returns { "pages": int, "placements": Array ({page:int, rect:Rect2i},
-# aligned with targets), "fallbacks": Array[String] }.
-static func _pack_pages(targets: Array[Target], page_size: int, texel_scale: float) -> Dictionary:
-	var inner := maxi(1, page_size - ATLAS_GUTTER) # leave a gutter so nothing touches the edge
+# Pack the targets into atlas pages at a uniform texel density (no stretching). Each mesh's
+# square chunk side = sqrt(world area) * BASE_DENSITY * texel_scale (px); chunks are
+# shelf-packed, and each page grows to fit its content but never exceeds max_texture_size in
+# either dimension — opening a new page when it would (multi-page like the native lightmapper,
+# where max_texture_size caps each atlas page). A mesh whose chunk can't fit one page is shrunk
+# to fit and its name returned in "fallbacks". Returns { "page_dims": Array[Vector2i] (one per
+# page), "placements": Array ({page:int, rect:Rect2i}, aligned with targets), "fallbacks":
+# Array[String] }.
+static func _pack_pages(targets: Array[Target], max_texture_size: int, texel_scale: float) -> Dictionary:
+	var cap := maxi(64, max_texture_size)
+	var inner := maxi(1, cap - ATLAS_GUTTER) # leave a gutter so nothing touches the edge
 	var density: float = BASE_DENSITY * (texel_scale if texel_scale > 0.0001 else 1.0)
 	var sizes: Array[int] = []
 	var fallbacks: Array[String] = []
@@ -501,14 +510,14 @@ static func _pack_pages(targets: Array[Target], page_size: int, texel_scale: flo
 		for pi in pages.size():
 			var pg: Dictionary = pages[pi]
 			for shelf in pg["shelves"]:
-				if shelf["x"] + cell <= page_size and cell <= shelf["h"]:
+				if shelf["x"] + cell <= cap and cell <= shelf["h"]:
 					placements[idx] = {"page": pi, "rect": _cell_rect(shelf["x"], shelf["y"], s)}
 					shelf["x"] += cell
 					placed = true
 					break
 			if placed:
 				break
-			if pg["bottom"] + cell <= page_size: # open a new shelf in this page
+			if pg["bottom"] + cell <= cap: # open a new shelf in this page
 				var y: int = pg["bottom"]
 				pg["shelves"].append({"y": y, "h": cell, "x": cell})
 				pg["bottom"] = y + cell
@@ -518,7 +527,28 @@ static func _pack_pages(targets: Array[Target], page_size: int, texel_scale: flo
 		if not placed: # need a new page
 			pages.append({"bottom": cell, "shelves": [{"y": 0, "h": cell, "x": cell}]})
 			placements[idx] = {"page": pages.size() - 1, "rect": _cell_rect(0, 0, s)}
-	return {"pages": pages.size(), "placements": placements, "fallbacks": fallbacks}
+	# size each page to its content (rounded up to a multiple of 4 for block-compression
+	# safety), never exceeding the cap
+	var page_dims: Array = []
+	page_dims.resize(pages.size())
+	for pi in pages.size():
+		page_dims[pi] = Vector2i(4, 4)
+	for idx in placements.size():
+		var pl: Dictionary = placements[idx]
+		var r: Rect2i = pl["rect"]
+		var pi: int = pl["page"]
+		var d: Vector2i = page_dims[pi]
+		page_dims[pi] = Vector2i(
+			maxi(d.x, _round_up(r.position.x + r.size.x + ATLAS_GUTTER / 2, 4)),
+			maxi(d.y, _round_up(r.position.y + r.size.y + ATLAS_GUTTER / 2, 4)))
+	for pi in page_dims.size():
+		page_dims[pi] = (page_dims[pi] as Vector2i).min(Vector2i(cap, cap))
+	return {"page_dims": page_dims, "placements": placements, "fallbacks": fallbacks}
+
+
+static func _round_up(v: int, mult: int) -> int:
+	@warning_ignore("integer_division")
+	return ((v + mult - 1) / mult) * mult
 
 
 # Content rect inside a gutter-padded cell whose top-left is (cx, cy), content side s.

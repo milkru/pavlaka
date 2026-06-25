@@ -57,8 +57,8 @@ Godot owns the UV2; Blender bakes into it. Meshes are packed into one or more at
 
 | Group | Property | Meaning |
 |---|---|---|
-| Blender Bake | `page_size` | Size (px) of each square atlas page. Meshes are packed across as many pages as needed (multi-page, like the native lightmapper). A mesh whose chunk can't fit one page is shrunk to fit and a warning is logged. |
 | Tweaks | `Texel Scale` | LightmapGI's own density multiplier. Each mesh's lightmap chunk is sized `sqrt(world surface area) × 10 × texel_scale`, so density is uniform across the scene (no stretching). Higher = sharper / more texels / more pages. Tune to your scene's scale. |
+| Tweaks | `Max Texture Size` | LightmapGI's own cap on each atlas page's dimensions. Pages grow to fit their content but never exceed this in either dimension, opening a new page when they would (multi-page, like the native lightmapper). A mesh whose chunk can't fit one page is shrunk to fit and a warning is logged. |
 | Tweaks | `Quality` | LightmapGI's own Quality dropdown (Low/Medium/High/Ultra), mapped to Cycles samples (64/128/256/512; denoised afterward). |
 | Environment | `Mode` | LightmapGI's own Environment Mode, used for the bake's ambient and sky: **Disabled** (none), **Scene** (bake the scene's `WorldEnvironment` sky to a panorama), **Custom Sky** (bake a given `Sky`), **Custom Color** (flat color). |
 | Environment | `Custom Sky` / `Custom Color` / `Custom Energy` | Used by the Custom Sky and Custom Color modes (energy scales either). |
@@ -78,9 +78,9 @@ controlled by the parameters above.
   `sky_rotation` (negligible for low frequency ambient and AO; get direct sun from a
   Static `DirectionalLight3D`, not the sky).
 - **Very large meshes get shrunk, not split.** A mesh whose lightmap chunk can't fit one
-  `page_size` page is scaled down to fit (lower density there) and a warning names it.
+  `Max Texture Size` page is scaled down to fit (lower density there) and a warning names it.
   Unlike the native lightmapper this never aborts the bake, but for best quality split the
-  mesh, raise `page_size`, or lower `Texel Scale`.
+  mesh, raise `Max Texture Size`, or lower `Texel Scale`.
 
 See **[RESEARCH.md](RESEARCH.md)** for the design, the Godot 4.7 source findings, the
 data contract, and the pitfalls discovered while building this.
