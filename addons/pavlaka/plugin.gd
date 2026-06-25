@@ -226,6 +226,9 @@ func _on_bake_pressed() -> void:
 	var cancelled := [false]
 	var dlg := AcceptDialog.new()
 	dlg.exclusive = false
+	# Non-transient: AcceptDialog is transient by default, but on Windows a transient window
+	# can't also be always-on-top (it errors on open, and asserts during teardown on close).
+	dlg.transient = false
 	# Borderless like LightmapGI's bake popup: no OS title bar/close button, just a panel
 	# with an in-dialog heading (so there's no title bar to carry the Blender icon). It's
 	# dragged by the title row (see below). Always-on-top so it stays visible while you keep
