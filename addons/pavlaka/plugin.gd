@@ -379,13 +379,17 @@ func _prompt_save_path(default_path: String) -> String:
 	dlg.add_filter("*.lmbake", "Lightmap Bake")
 	if not default_path.is_empty():
 		dlg.current_path = default_path
+	# Drive completion from both signals rather than visibility_changed: EditorFileDialog may
+	# hide before emitting file_selected, so awaiting visibility alone can resume with no path.
+	var result := {"path": "", "done": false}
+	dlg.file_selected.connect(func(p: String): result.path = p; result.done = true)
+	dlg.canceled.connect(func(): result.done = true)
 	EditorInterface.get_base_control().add_child(dlg)
 	dlg.popup_file_dialog()
-	var chosen := [""]
-	dlg.file_selected.connect(func(p: String): chosen[0] = p)
-	await dlg.visibility_changed # fires when the dialog closes (selected or cancelled)
+	while not result.done:
+		await Engine.get_main_loop().process_frame
 	dlg.queue_free()
-	return chosen[0]
+	return result.path
 
 
 # ---- headless self-test ----------------------------------------------------
