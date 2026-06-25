@@ -149,12 +149,7 @@ func _logo(px: int) -> Texture2D:
 # build the inline progress strip ([logo] Baking… Ns [Cancel]); hidden until a bake starts
 func _build_progress_strip() -> void:
 	_progress = HBoxContainer.new()
-	# use the bake button's own icon-text gap so the strip's logo-text spacing matches it
-	var hsep := 4
-	var bt := EditorInterface.get_editor_theme()
-	if bt != null and bt.has_constant("h_separation", "Button"):
-		hsep = bt.get_constant("h_separation", "Button")
-	_progress.add_theme_constant_override("separation", hsep)
+	_progress.add_theme_constant_override("separation", 2) # small gap between logo and label
 	# match the bake button's height exactly (it's theme/DPI dependent, so read it, don't
 	# hardcode); _btn is already created and themed by the time we build the strip
 	var row_h := _btn.get_combined_minimum_size().y if _btn else 0.0
