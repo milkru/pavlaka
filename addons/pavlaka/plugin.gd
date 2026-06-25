@@ -246,12 +246,27 @@ func _on_bake_pressed() -> void:
 	var vb := VBoxContainer.new()
 	vb.add_theme_constant_override("separation", 8)
 
-	# A blocky filled bar like the built-in bake popup. Plain (non-indeterminate) so it uses
-	# the same chunky theme as LightmapGI's bar instead of the thin rounded indeterminate
-	# style; we loop its fill below for the "loading" feel (Blender's progress is unknown).
+	# Keep the cycling indeterminate indicator (Blender's progress is unknown), but restyle
+	# it to LightmapGI's chunky, sharp-edged look instead of the thin rounded default:
+	# taller, with the ProgressBar styleboxes' rounded corners squared off.
 	var bar := ProgressBar.new()
+	bar.indeterminate = true
+	bar.editor_preview_indeterminate = true
 	bar.show_percentage = false
 	bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bar.custom_minimum_size = Vector2(0, 22)
+	var bar_theme := EditorInterface.get_editor_theme()
+	if bar_theme != null:
+		for sb_name in ["background", "fill"]:
+			if bar_theme.has_stylebox(sb_name, "ProgressBar"):
+				var sb := bar_theme.get_stylebox(sb_name, "ProgressBar").duplicate()
+				if sb is StyleBoxFlat:
+					var f := sb as StyleBoxFlat
+					f.corner_radius_top_left = 0
+					f.corner_radius_top_right = 0
+					f.corner_radius_bottom_left = 0
+					f.corner_radius_bottom_right = 0
+				bar.add_theme_stylebox_override(sb_name, sb)
 
 	var status := Label.new()
 	status.text = "In the oven…  0 s"
@@ -285,11 +300,6 @@ func _on_bake_pressed() -> void:
 	EditorInterface.get_base_control().add_child(dlg)
 	dlg.popup_centered()
 	_set_window_icon(dlg)
-
-	# loop the fill 0 -> 100 so it reads as a "loading" bar while keeping the blocky look
-	# (tween must be created once the bar is in the tree)
-	var tw := bar.create_tween().set_loops()
-	tw.tween_property(bar, "value", 100.0, 1.5).from(0.0)
 
 	var err: int = await PavlakaBaker.bake(root, _current, blender, _current.get_bake_opts(), Callable(), cancelled)
 
