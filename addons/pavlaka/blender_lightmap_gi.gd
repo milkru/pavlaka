@@ -1,8 +1,8 @@
 @tool
-# red monochrome (#fc7f7f) Blender mark to match Godot's other 3D node icons. Custom @icon
-# icons aren't auto-tinted, so the red is baked into this file (the colored blender-icon.svg
-# is still used for the toolbar button/progress strip).
-@icon("res://addons/pavlaka/blender-icon-red.svg")
+# red monochrome Blender mark to match Godot's other 3D node icons. Custom @icon icons aren't
+# auto-tinted, so the red is baked into this file (the colored blender-icon.svg is still used
+# for the toolbar button / progress strip).
+@icon("res://addons/pavlaka/blender.svg")
 class_name BlenderLightmapGI
 extends LightmapGI
 ## A LightmapGI whose lighting is baked externally by Blender (Cycles) via the pavlaka

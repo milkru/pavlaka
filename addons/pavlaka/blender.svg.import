@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://4i1ke64ukliu"
-path="res://.godot/imported/blender-icon-red.svg-58dcb9dbcde541161fce58d0fab44be1.ctex"
+uid="uid://ydoejp0mmkyq"
+path="res://.godot/imported/blender.svg-1978c1b8ab81b69dfd5f017933240110.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://addons/pavlaka/blender-icon-red.svg"
-dest_files=["res://.godot/imported/blender-icon-red.svg-58dcb9dbcde541161fce58d0fab44be1.ctex"]
+source_file="res://addons/pavlaka/blender.svg"
+dest_files=["res://.godot/imported/blender.svg-1978c1b8ab81b69dfd5f017933240110.ctex"]
 
 [params]
 
