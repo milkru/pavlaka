@@ -219,7 +219,7 @@ func _on_bake_pressed() -> void:
 	dlg.title = "Bake with Blender"
 	dlg.get_ok_button().hide()
 	dlg.unresizable = true
-	dlg.min_size = Vector2i(460, 0)
+	dlg.min_size = Vector2i(500, 0)
 
 	var margin := MarginContainer.new()
 	margin.add_theme_constant_override("margin_left", 18)
@@ -229,31 +229,24 @@ func _on_bake_pressed() -> void:
 	var vb := VBoxContainer.new()
 	vb.add_theme_constant_override("separation", 12)
 
-	# heading, like LightmapGI's "Bake Lightmaps"
+	var ed_theme := EditorInterface.get_editor_theme()
+
+	# heading like LightmapGI's "Bake Lightmaps" (bold)
 	var heading := Label.new()
 	heading.text = "Bake with Blender"
-	heading.add_theme_font_size_override("font_size", 16)
+	if ed_theme != null and ed_theme.has_font("bold", "EditorFonts"):
+		heading.add_theme_font_override("font", ed_theme.get_font("bold", "EditorFonts"))
 
-	# Cycling indeterminate bar (Blender's progress is unknown), restyled to LightmapGI's
-	# chunky, sharp-edged look (taller, squared corners) instead of the thin rounded default.
+	# Cycling indeterminate bar. The editor's bake popup styles its bar with the
+	# "PopupProgressBar" theme variation (lighter gray track) — NOT the default ProgressBar
+	# (near-black track). Matching that variation is what makes it look like LightmapGI.
 	var bar := ProgressBar.new()
+	bar.theme_type_variation = "PopupProgressBar"
 	bar.indeterminate = true
 	bar.editor_preview_indeterminate = true
 	bar.show_percentage = false
 	bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	bar.custom_minimum_size = Vector2(0, 30)
-	var bar_theme := EditorInterface.get_editor_theme()
-	if bar_theme != null:
-		for sb_name in ["background", "fill"]:
-			if bar_theme.has_stylebox(sb_name, "ProgressBar"):
-				var sb := bar_theme.get_stylebox(sb_name, "ProgressBar").duplicate()
-				if sb is StyleBoxFlat:
-					var f := sb as StyleBoxFlat
-					f.corner_radius_top_left = 0
-					f.corner_radius_top_right = 0
-					f.corner_radius_bottom_left = 0
-					f.corner_radius_bottom_right = 0
-				bar.add_theme_stylebox_override(sb_name, sb)
+	bar.custom_minimum_size = Vector2(0, 28)
 
 	var status := Label.new()
 	status.text = "In the oven…  0 s"
