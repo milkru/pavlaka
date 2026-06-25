@@ -125,6 +125,19 @@ func _find_builtin_bake_button() -> Button:
 	return null
 
 
+# Format an elapsed duration, promoting to minutes/hours only once it passes each limit:
+# "5 s" -> "2 m 5 s" -> "1 h 2 m 5 s".
+func _fmt_elapsed(total_seconds: int) -> String:
+	var s := total_seconds % 60
+	var m := (total_seconds / 60) % 60
+	var h := total_seconds / 3600
+	if h > 0:
+		return "%d h %d m %d s" % [h, m, s]
+	if m > 0:
+		return "%d m %d s" % [m, s]
+	return "%d s" % s
+
+
 # re-hide the built-in bake button whenever it reappears while our node is selected
 func _on_builtin_vis() -> void:
 	if _current != null and _builtin_btn != null and _builtin_btn.visible:
@@ -278,7 +291,7 @@ func _on_bake_pressed() -> void:
 		if not cancelled.is_empty() and cancelled[0]:
 			status.text = "Cancelling…"
 		else:
-			status.text = "In the oven…  %d s" % ((Time.get_ticks_msec() - start_ms) / 1000)
+			status.text = "In the oven…  %s" % _fmt_elapsed((Time.get_ticks_msec() - start_ms) / 1000)
 	var timer := Timer.new()
 	timer.wait_time = 1.0
 	timer.autostart = true
