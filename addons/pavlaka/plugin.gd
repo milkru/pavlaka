@@ -306,12 +306,6 @@ func _autobake() -> void:
 	print("PAVLAKA_AUTO: bake err=", err,
 		" users=", lm.light_data.get_user_count() if lm.light_data else -1,
 		" textures=", lm.light_data.get_lightmap_textures().size() if lm.light_data else -1)
-
-	if err == OK:
-		var ps := PackedScene.new()
-		ps.pack(root)
-		var save_err := ResourceSaver.save(ps, "res://poc/out/baked_scene.tscn")
-		print("PAVLAKA_AUTO: saved baked_scene.tscn err=", save_err)
 	print("PAVLAKA_AUTO: ", "PASS" if err == OK else "FAIL")
 	get_tree().quit(err)
 

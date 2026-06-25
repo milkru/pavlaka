@@ -2,10 +2,10 @@
 
 Imports a glb from Godot, finds every lightmap target (mesh with >=2 UV layers = it
 carries a Godot UV2), and bakes IRRADIANCE (Diffuse, Direct+Indirect, Color OFF) into
-each target's UV2. Each mesh -> its own denoised linear EXR slice (baked_<i>.exr).
+each target's UV2. Each mesh -> its own denoised linear EXR slice, named after the node.
 Godot combines the per-mesh slices into one layered atlas via set_lightmap_textures([...]).
 
-  blender --background --python bake.py -- <glb> <out_dir> [atlas sun_energy ambient samples amb_r amb_g amb_b]
+  blender --background --python bake.py -- <glb> <out_dir> <params.json>
 
 The plugin runs this non-blocking and can't read stdout, so everything is mirrored to
 <out_dir>/bake.log and the whole run is wrapped so a fatal error still writes baked.json.
