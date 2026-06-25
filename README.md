@@ -77,9 +77,6 @@ controlled by the parameters above.
   Static `DirectionalLight3D`, not the sky).
 - **One slice per mesh.** There is no space efficient atlas packing yet, and every mesh
   gets a full resolution slice regardless of size (Texture2DArray layers share dimensions).
-- **Editor only, like the native bake.** Baking runs from the editor (it uses the editor
-  filesystem to import the result), so it isn't a headless operation. Godot's own
-  "Bake Lightmaps" works the same way.
 
 See **[RESEARCH.md](RESEARCH.md)** for the design, the Godot 4.7 source findings, the
 data contract, and the pitfalls discovered while building this.
