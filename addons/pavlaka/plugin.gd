@@ -219,30 +219,29 @@ func _on_bake_pressed() -> void:
 	_baking = true
 	_update_button()
 
-	# progress dialog so the editor shows feedback instead of appearing frozen. Forced
-	# NON-exclusive (AcceptDialog defaults to exclusive): an exclusive popup collides with
-	# the editor's reimport ProgressDialog during import and crashes (progress_dialog.cpp).
-	# Non-exclusive lets both coexist, so the bar can stay up through the whole bake.
+	# Progress UI as an overlay Control *inside* the editor window — NOT a separate Window.
+	# A Window (even transient) is alt-tab-able and falls behind the editor when you click it,
+	# which reads as "the bake finished". An embedded panel can't go behind (it's part of the
+	# editor), yet only its own rect captures clicks, so the rest of the editor stays usable
+	# during the (non-blocking) bake.
 	var cancelled := [false]
-	var dlg := AcceptDialog.new()
-	dlg.exclusive = false
-	# Borderless like LightmapGI's bake popup: no OS title bar/close button, just a panel
-	# with an in-dialog heading. Dragged by the title row (see below).
-	dlg.set_flag(Window.FLAG_BORDERLESS, true)
-	dlg.title = "Bake with Blender"
-	dlg.get_ok_button().hide()
-	dlg.unresizable = true
-	dlg.min_size = Vector2i(625, 0) # 1.25x wider, to match the default bake popup's width
+	var ed_theme := EditorInterface.get_editor_theme()
+	var base := EditorInterface.get_base_control()
+
+	var overlay := PanelContainer.new()
+	# dark dialog-like panel (fall back to the default PanelContainer look if unavailable)
+	if ed_theme != null and ed_theme.has_stylebox("panel", "PopupPanel"):
+		overlay.add_theme_stylebox_override("panel", ed_theme.get_stylebox("panel", "PopupPanel"))
+	overlay.custom_minimum_size = Vector2(625, 0) # match the default bake popup's width
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP # eat clicks on the panel, pass the rest
 
 	var margin := MarginContainer.new()
 	margin.add_theme_constant_override("margin_left", 18)
 	margin.add_theme_constant_override("margin_right", 18)
-	margin.add_theme_constant_override("margin_top", 10)
-	margin.add_theme_constant_override("margin_bottom", 10)
+	margin.add_theme_constant_override("margin_top", 12)
+	margin.add_theme_constant_override("margin_bottom", 12)
 	var vb := VBoxContainer.new()
-	vb.add_theme_constant_override("separation", 6) # tightened so the height matches too
-
-	var ed_theme := EditorInterface.get_editor_theme()
+	vb.add_theme_constant_override("separation", 8)
 
 	# title row: a square Blender icon + bold heading (like LightmapGI's "Bake Lightmaps")
 	var title_row := HBoxContainer.new()
@@ -265,7 +264,7 @@ func _on_bake_pressed() -> void:
 	heading.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	title_row.add_child(heading)
 
-	# the title row is the drag handle (borderless windows have no title bar to grab)
+	# the title row is the drag handle; move the overlay within the editor, clamped on-screen
 	title_row.mouse_filter = Control.MOUSE_FILTER_STOP
 	title_row.mouse_default_cursor_shape = Control.CURSOR_MOVE
 	var dragging := [false]
@@ -273,11 +272,11 @@ func _on_bake_pressed() -> void:
 		if ev is InputEventMouseButton and (ev as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
 			dragging[0] = (ev as InputEventMouseButton).pressed
 		elif ev is InputEventMouseMotion and dragging[0]:
-			dlg.position += Vector2i((ev as InputEventMouseMotion).relative))
+			overlay.position = (overlay.position + (ev as InputEventMouseMotion).relative).clamp(
+				Vector2.ZERO, (base.size - overlay.size).max(Vector2.ZERO)))
 
-	# Cycling indeterminate bar. The editor's bake popup styles its bar with the
-	# "PopupProgressBar" theme variation (lighter gray track) — NOT the default ProgressBar
-	# (near-black track). Matching that variation is what makes it look like LightmapGI.
+	# Cycling indeterminate bar, styled with the "PopupProgressBar" theme variation (the
+	# lighter gray track the editor's bake popup uses), not the default near-black ProgressBar.
 	var bar := ProgressBar.new()
 	bar.theme_type_variation = "PopupProgressBar"
 	bar.indeterminate = true
@@ -289,11 +288,18 @@ func _on_bake_pressed() -> void:
 	var status := Label.new()
 	status.text = "In the oven…  0 s"
 
+	var cancel_btn := Button.new()
+	cancel_btn.text = "Cancel"
+	var cancel_row := HBoxContainer.new()
+	cancel_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	cancel_row.add_child(cancel_btn)
+
 	vb.add_child(title_row)
 	vb.add_child(bar)
 	vb.add_child(status)
+	vb.add_child(cancel_row)
 	margin.add_child(vb)
-	dlg.add_child(margin)
+	overlay.add_child(margin)
 
 	# tick elapsed seconds into the status line
 	var start_ms := Time.get_ticks_msec()
@@ -308,25 +314,27 @@ func _on_bake_pressed() -> void:
 	timer.wait_time = 1.0
 	timer.autostart = true
 	timer.timeout.connect(tick)
-	dlg.add_child(timer)
+	overlay.add_child(timer)
 
 	var on_cancel := func():
 		cancelled[0] = true
+		cancel_btn.disabled = true
 		if is_instance_valid(status):
 			status.text = "Cancelling…"
-	dlg.add_button("Cancel", true, "cancel").pressed.connect(on_cancel)
-	dlg.canceled.connect(on_cancel) # closing the dialog (X / Esc) also cancels the bake
-	EditorInterface.get_base_control().add_child(dlg)
-	# Transient (popup's default): the dialog floats above the editor window and, being
-	# non-exclusive, lets you keep working. We deliberately do NOT use the always-on-top OS
-	# flag — toggling it on this borderless popup recreates the native window on Windows and
-	# leaves it black/unmovable.
-	dlg.popup_centered()
+	cancel_btn.pressed.connect(on_cancel)
+
+	overlay.visible = false # placed after one frame so we know its size to center it
+	base.add_child(overlay)
+	overlay.move_to_front() # draw above the rest of the editor
+	await Engine.get_main_loop().process_frame
+	if is_instance_valid(overlay):
+		overlay.position = ((base.size - overlay.size) * 0.5).clamp(Vector2.ZERO, base.size)
+		overlay.visible = true
 
 	var err: int = await PavlakaBaker.bake(root, _current, blender, _current.get_bake_opts(), Callable(), cancelled)
 
-	if is_instance_valid(dlg):
-		dlg.queue_free()
+	if is_instance_valid(overlay):
+		overlay.queue_free()
 	if err == OK:
 		EditorInterface.mark_scene_as_unsaved()
 	_baking = false
