@@ -128,29 +128,23 @@ func _find_builtin_bake_button() -> Button:
 # Put the Blender logo on the bake dialog's title bar. Only works when the dialog is a
 # native OS window — Godot's embedded subwindow title bar has no icon slot, and
 # get_window_id() there is the editor's main window, so we'd clobber the editor's icon.
-# Loaded straight from disk (no import dependency); silently skipped if the file is absent.
+# Silently skipped if the icon resource is absent.
 func _set_window_icon(dlg: Window) -> void:
 	if dlg.is_embedded():
 		return
-	var icon_path := (get_script() as Script).resource_path.get_base_dir().path_join(
-		"blender_logo_kit/square/blender_icon_128x128.png")
-	if not FileAccess.file_exists(icon_path):
-		return
-	var img := Image.load_from_file(icon_path)
-	if img != null:
-		DisplayServer.window_set_icon(img, dlg.get_window_id())
+	var tex := _load_addon_texture("blender_logo_kit/square/blender_icon_128x128.png")
+	if tex != null:
+		DisplayServer.window_set_icon(tex.get_image(), dlg.get_window_id())
 
 
-# Load an image shipped in the addon as a Texture2D, straight from disk (no import
-# dependency). Returns null if the file is missing or can't be decoded.
+# Load an image shipped in the addon as its imported Texture2D. Using load() (rather than
+# Image.load_from_file) avoids the "won't work on export" warning and reuses the editor's
+# imported copy. Returns null if the resource isn't present/importable.
 func _load_addon_texture(rel_path: String) -> Texture2D:
 	var p := (get_script() as Script).resource_path.get_base_dir().path_join(rel_path)
-	if not FileAccess.file_exists(p):
+	if not ResourceLoader.exists(p):
 		return null
-	var img := Image.load_from_file(p)
-	if img == null:
-		return null
-	return ImageTexture.create_from_image(img)
+	return load(p) as Texture2D
 
 
 # re-hide the built-in bake button whenever it reappears while our node is selected
@@ -250,25 +244,11 @@ func _on_bake_pressed() -> void:
 	for side in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
 		margin.add_theme_constant_override(side, 18)
 	var vb := VBoxContainer.new()
-	vb.add_theme_constant_override("separation", 12)
+	vb.add_theme_constant_override("separation", 14)
 
-	# Blender logo banner, scaled down from the 1800x550 lockup (loaded from disk, no import)
-	var logo := TextureRect.new()
-	var logo_tex := _load_addon_texture("blender_logo_kit/blender_logo_socket.png")
-	if logo_tex != null:
-		logo.texture = logo_tex
-	logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	logo.custom_minimum_size = Vector2(190, 58)
-	logo.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-
-	var heading := Label.new()
-	heading.text = "Bake with Blender Cycles"
-	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	heading.add_theme_font_size_override("font_size", 15)
-
-	# spinner (a rotating Reload icon) + status line "In the oven…  Ns"
+	# spinner (a rotating Reload icon) + status line "In the oven…  Ns", right-aligned
 	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.alignment = BoxContainer.ALIGNMENT_END
 	row.add_theme_constant_override("separation", 8)
 	var spin := TextureRect.new()
 	var th := EditorInterface.get_editor_theme()
@@ -283,9 +263,19 @@ func _on_bake_pressed() -> void:
 	row.add_child(spin)
 	row.add_child(status)
 
-	vb.add_child(logo)
-	vb.add_child(heading)
+	# small Blender logo tucked into the lower-right. EXPAND_IGNORE_SIZE so the TextureRect
+	# doesn't inherit the texture's full 1800x550 size; custom_minimum_size then controls it.
+	var logo := TextureRect.new()
+	var logo_tex := _load_addon_texture("blender_logo_kit/blender_logo_socket.png")
+	if logo_tex != null:
+		logo.texture = logo_tex
+	logo.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT
+	logo.custom_minimum_size = Vector2(120, 37)
+	logo.size_flags_horizontal = Control.SIZE_SHRINK_END # pin to the right
+
 	vb.add_child(row)
+	vb.add_child(logo)
 	margin.add_child(vb)
 	dlg.add_child(margin)
 
