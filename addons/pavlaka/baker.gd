@@ -579,25 +579,31 @@ static func _find(targets: Array[Target], mesh_name: String) -> Target:
 	return null
 
 
-# Returns true if a fresh .import was created (the file is new to the project), false if
-# one already existed (a re-bake). Keeps an existing .import as-is so its assigned UID
-# stays stable across re-bakes (else scenes/.lmbake referencing the old UID warn).
-static func _write_exr_import(exr_res_path: String) -> bool:
+# Write the page's .import preset, preserving an existing UID line (so re-bakes keep stable
+# UIDs that scenes/.lmbake reference) while still updating the params.
+# compress/mode=0 (lossless), NOT VRAM-compressed: VRAM compression rounds the texture up to
+# the next power of two (e.g. 1536 -> 2048, 2049 -> 4096), which both wastes atlas space (black
+# padding) and can blow past Max Texture Size. Lossless keeps the page at its exact content-fit
+# dimensions (and avoids BC6H banding on HDR lightmaps).
+static func _write_exr_import(exr_res_path: String) -> void:
+	var uid_line := ""
 	if FileAccess.file_exists(exr_res_path + ".import"):
-		return false
+		for line in FileAccess.get_file_as_string(exr_res_path + ".import").split("\n"):
+			if line.begins_with("uid="):
+				uid_line = "\n" + line
+				break
 	var f := FileAccess.open(exr_res_path + ".import", FileAccess.WRITE)
 	f.store_string("""[remap]
 
 importer="2d_array_texture"
-type="CompressedTexture2DArray"
+type="CompressedTexture2DArray"%s
 
 [params]
 
-compress/mode=2
+compress/mode=0
 compress/channel_pack=1
 mipmaps/generate=false
 slices/horizontal=1
 slices/vertical=1
-""")
+""" % uid_line)
 	f.close()
-	return true
