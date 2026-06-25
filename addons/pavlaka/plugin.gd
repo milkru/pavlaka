@@ -237,22 +237,27 @@ func _on_bake_pressed() -> void:
 	if ed_theme != null and ed_theme.has_font("bold", "EditorFonts"):
 		heading.add_theme_font_override("font", ed_theme.get_font("bold", "EditorFonts"))
 
-	# Cycling indeterminate bar. The editor's bake popup styles its bar with the
-	# "PopupProgressBar" theme variation (lighter gray track) — NOT the default ProgressBar
-	# (near-black track). Matching that variation is what makes it look like LightmapGI.
-	var bar := ProgressBar.new()
-	bar.theme_type_variation = "PopupProgressBar"
-	bar.indeterminate = true
-	bar.editor_preview_indeterminate = true
-	bar.show_percentage = false
-	bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	bar.custom_minimum_size = Vector2(0, 22)
+	# Indeterminate bar built by hand: the built-in ProgressBar hardcodes its moving segment
+	# to height*2, so to control its width we draw it ourselves — a track panel + a moving
+	# fill panel, both using the editor's "PopupProgressBar" styleboxes so it still looks
+	# exactly like the default bake popup. Animated below once it's laid out.
+	var track := Panel.new()
+	track.custom_minimum_size = Vector2(0, 22)
+	track.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	track.clip_contents = true
+	var fill := Panel.new()
+	if ed_theme != null:
+		if ed_theme.has_stylebox("background", "PopupProgressBar"):
+			track.add_theme_stylebox_override("panel", ed_theme.get_stylebox("background", "PopupProgressBar"))
+		if ed_theme.has_stylebox("fill", "PopupProgressBar"):
+			fill.add_theme_stylebox_override("panel", ed_theme.get_stylebox("fill", "PopupProgressBar"))
+	track.add_child(fill)
 
 	var status := Label.new()
 	status.text = "In the oven…  0 s"
 
 	vb.add_child(heading)
-	vb.add_child(bar)
+	vb.add_child(track)
 	vb.add_child(status)
 	margin.add_child(vb)
 	dlg.add_child(margin)
@@ -280,6 +285,13 @@ func _on_bake_pressed() -> void:
 	dlg.canceled.connect(on_cancel) # closing the dialog (X / Esc) also cancels the bake
 	EditorInterface.get_base_control().add_child(dlg)
 	dlg.popup_centered()
+	await Engine.get_main_loop().process_frame # let the track lay out so we know its width
+	if is_instance_valid(track):
+		var seg := track.size.y * 4.0 # 2x the built-in indeterminate segment (which is height*2)
+		fill.size = Vector2(seg, track.size.y)
+		fill.position = Vector2(-seg, 0)
+		var tw := track.create_tween().set_loops()
+		tw.tween_property(fill, "position:x", track.size.x, (track.size.x + seg) / 320.0).from(-seg)
 
 	var err: int = await PavlakaBaker.bake(root, _current, blender, _current.get_bake_opts(), Callable(), cancelled)
 
