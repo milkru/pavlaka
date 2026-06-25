@@ -14,6 +14,13 @@ var _btn: Button
 var _builtin_btn: Button
 var _current: LightmapBlenderGI
 var _baking := false
+# inline progress strip shown in the toolbar in place of the bake button while baking
+var _progress: HBoxContainer
+var _progress_label: Label
+var _progress_timer: Timer
+var _cancel_btn: Button
+var _cancelled: Array = [false]
+var _bake_start_ms := 0
 
 
 func _enter_tree() -> void:
@@ -48,6 +55,7 @@ func _enter_tree() -> void:
 		_btn.icon = theme.get_icon("Bake", "EditorIcons") # match the built-in bake button
 	_btn.hide() # shown only while a LightmapBlenderGI is selected
 	add_control_to_container(CONTAINER_SPATIAL_EDITOR_MENU, _btn)
+	_build_progress_strip()
 
 	# drive button visibility from the editor selection (reliable across selections)
 	EditorInterface.get_selection().selection_changed.connect(_on_selection_changed)
@@ -71,6 +79,10 @@ func _exit_tree() -> void:
 		remove_control_from_container(CONTAINER_SPATIAL_EDITOR_MENU, _btn)
 		_btn.queue_free()
 		_btn = null
+	if _progress:
+		remove_control_from_container(CONTAINER_SPATIAL_EDITOR_MENU, _progress)
+		_progress.queue_free()
+		_progress = null
 
 
 # show the bake button only while a LightmapBlenderGI node is selected
@@ -90,16 +102,72 @@ func _on_selection_changed() -> void:
 		b.visible = false
 
 
-# single source of truth for the button: shown only with a LightmapBlenderGI selected,
-# and disabled while baking or when the Blender path is unset/invalid (with a tooltip).
+# single source of truth for the toolbar slot. While baking, the progress strip replaces
+# the button and stays visible regardless of selection. Otherwise the button shows only
+# with a LightmapBlenderGI selected, disabled when the Blender path is unset/invalid.
 func _update_button() -> void:
 	if _btn == null:
 		return
+	if _baking:
+		_btn.visible = false
+		if _progress:
+			_progress.visible = true
+		return
+	if _progress:
+		_progress.visible = false
 	_btn.visible = _current != null
 	var path := _blender_path()
 	var path_ok := not path.is_empty() and FileAccess.file_exists(path)
-	_btn.disabled = _baking or not path_ok
+	_btn.disabled = not path_ok
 	_btn.tooltip_text = "" if path_ok else "Set the Blender path in Project Settings → pavlaka/blender_path"
+
+
+# build the inline progress strip ([logo] Baking… Ns [Cancel]); hidden until a bake starts
+func _build_progress_strip() -> void:
+	_progress = HBoxContainer.new()
+	_progress.add_theme_constant_override("separation", 6)
+	var icon_path := (get_script() as Script).resource_path.get_base_dir().path_join("blender_icon.png")
+	if ResourceLoader.exists(icon_path):
+		var icon := TextureRect.new()
+		icon.texture = load(icon_path)
+		icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		icon.custom_minimum_size = Vector2(16, 16)
+		icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		_progress.add_child(icon)
+	_progress_label = Label.new()
+	_progress_label.text = "Baking… 0 s"
+	_progress_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_progress.add_child(_progress_label)
+	_cancel_btn = Button.new()
+	_cancel_btn.text = "Cancel"
+	_cancel_btn.set_theme_type_variation("FlatButton") # match the toolbar's flat buttons
+	_cancel_btn.pressed.connect(_on_cancel_pressed)
+	_progress.add_child(_cancel_btn)
+	_progress.hide()
+	add_control_to_container(CONTAINER_SPATIAL_EDITOR_MENU, _progress)
+	# drives the elapsed counter once per second while baking
+	_progress_timer = Timer.new()
+	_progress_timer.wait_time = 1.0
+	_progress_timer.timeout.connect(_tick_progress)
+	_progress.add_child(_progress_timer)
+
+
+func _tick_progress() -> void:
+	if _progress_label == null:
+		return
+	if not _cancelled.is_empty() and _cancelled[0]:
+		_progress_label.text = "Cancelling…"
+	else:
+		_progress_label.text = "Baking… %s" % _fmt_elapsed((Time.get_ticks_msec() - _bake_start_ms) / 1000)
+
+
+func _on_cancel_pressed() -> void:
+	_cancelled[0] = true
+	if _cancel_btn:
+		_cancel_btn.disabled = true
+	if _progress_label:
+		_progress_label.text = "Cancelling…"
 
 
 func _find_builtin_bake_button() -> Button:
@@ -216,125 +284,24 @@ func _on_bake_pressed() -> void:
 		push_error("pavlaka: Blender not found at '%s' — fix Project Settings → pavlaka/blender_path" % blender)
 		return
 
+	# Show the inline progress strip in the toolbar (in place of the bake button). It stays
+	# visible regardless of selection while baking; the editor remains fully usable since the
+	# bake runs non-blocking.
 	_baking = true
+	_cancelled = [false]
+	_bake_start_ms = Time.get_ticks_msec()
+	if _cancel_btn:
+		_cancel_btn.disabled = false
+	if _progress_label:
+		_progress_label.text = "Baking… 0 s"
 	_update_button()
+	if _progress_timer:
+		_progress_timer.start()
 
-	# Progress UI as an overlay Control *inside* the editor window — NOT a separate Window.
-	# A Window (even transient) is alt-tab-able and falls behind the editor when you click it,
-	# which reads as "the bake finished". An embedded panel can't go behind (it's part of the
-	# editor), yet only its own rect captures clicks, so the rest of the editor stays usable
-	# during the (non-blocking) bake.
-	var cancelled := [false]
-	var ed_theme := EditorInterface.get_editor_theme()
-	var base := EditorInterface.get_base_control()
+	var err: int = await PavlakaBaker.bake(root, _current, blender, _current.get_bake_opts(), Callable(), _cancelled)
 
-	var overlay := PanelContainer.new()
-	# dark dialog-like panel (fall back to the default PanelContainer look if unavailable)
-	if ed_theme != null and ed_theme.has_stylebox("panel", "PopupPanel"):
-		overlay.add_theme_stylebox_override("panel", ed_theme.get_stylebox("panel", "PopupPanel"))
-	overlay.custom_minimum_size = Vector2(625, 0) # match the default bake popup's width
-	overlay.mouse_filter = Control.MOUSE_FILTER_STOP # eat clicks on the panel, pass the rest
-
-	var margin := MarginContainer.new()
-	margin.add_theme_constant_override("margin_left", 18)
-	margin.add_theme_constant_override("margin_right", 18)
-	margin.add_theme_constant_override("margin_top", 12)
-	margin.add_theme_constant_override("margin_bottom", 12)
-	var vb := VBoxContainer.new()
-	vb.add_theme_constant_override("separation", 8)
-
-	# title row: a square Blender icon + bold heading (like LightmapGI's "Bake Lightmaps")
-	var title_row := HBoxContainer.new()
-	title_row.add_theme_constant_override("separation", 4) # small gap between icon and text
-	var icon_path := (get_script() as Script).resource_path.get_base_dir().path_join("blender_icon.png")
-	if ResourceLoader.exists(icon_path):
-		var icon := TextureRect.new()
-		icon.texture = load(icon_path)
-		icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		icon.custom_minimum_size = Vector2(20, 20)
-		icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		icon.mouse_filter = Control.MOUSE_FILTER_IGNORE # let drags reach the title row
-		title_row.add_child(icon)
-	var heading := Label.new()
-	heading.text = "Bake with Blender Cycles"
-	if ed_theme != null and ed_theme.has_font("bold", "EditorFonts"):
-		heading.add_theme_font_override("font", ed_theme.get_font("bold", "EditorFonts"))
-	heading.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	heading.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	title_row.add_child(heading)
-
-	# the title row is the drag handle; move the overlay within the editor, clamped on-screen
-	title_row.mouse_filter = Control.MOUSE_FILTER_STOP
-	title_row.mouse_default_cursor_shape = Control.CURSOR_MOVE
-	var dragging := [false]
-	title_row.gui_input.connect(func(ev: InputEvent):
-		if ev is InputEventMouseButton and (ev as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
-			dragging[0] = (ev as InputEventMouseButton).pressed
-		elif ev is InputEventMouseMotion and dragging[0]:
-			overlay.position = (overlay.position + (ev as InputEventMouseMotion).relative).clamp(
-				Vector2.ZERO, (base.size - overlay.size).max(Vector2.ZERO)))
-
-	# Cycling indeterminate bar, styled with the "PopupProgressBar" theme variation (the
-	# lighter gray track the editor's bake popup uses), not the default near-black ProgressBar.
-	var bar := ProgressBar.new()
-	bar.theme_type_variation = "PopupProgressBar"
-	bar.indeterminate = true
-	bar.editor_preview_indeterminate = true
-	bar.show_percentage = false
-	bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	bar.custom_minimum_size = Vector2(0, 22)
-
-	var status := Label.new()
-	status.text = "In the oven…  0 s"
-
-	var cancel_btn := Button.new()
-	cancel_btn.text = "Cancel"
-	var cancel_row := HBoxContainer.new()
-	cancel_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	cancel_row.add_child(cancel_btn)
-
-	vb.add_child(title_row)
-	vb.add_child(bar)
-	vb.add_child(status)
-	vb.add_child(cancel_row)
-	margin.add_child(vb)
-	overlay.add_child(margin)
-
-	# tick elapsed seconds into the status line
-	var start_ms := Time.get_ticks_msec()
-	var tick := func():
-		if not is_instance_valid(status):
-			return
-		if not cancelled.is_empty() and cancelled[0]:
-			status.text = "Cancelling…"
-		else:
-			status.text = "In the oven…  %s" % _fmt_elapsed((Time.get_ticks_msec() - start_ms) / 1000)
-	var timer := Timer.new()
-	timer.wait_time = 1.0
-	timer.autostart = true
-	timer.timeout.connect(tick)
-	overlay.add_child(timer)
-
-	var on_cancel := func():
-		cancelled[0] = true
-		cancel_btn.disabled = true
-		if is_instance_valid(status):
-			status.text = "Cancelling…"
-	cancel_btn.pressed.connect(on_cancel)
-
-	overlay.visible = false # placed after one frame so we know its size to center it
-	base.add_child(overlay)
-	overlay.move_to_front() # draw above the rest of the editor
-	await Engine.get_main_loop().process_frame
-	if is_instance_valid(overlay):
-		overlay.position = ((base.size - overlay.size) * 0.5).clamp(Vector2.ZERO, base.size)
-		overlay.visible = true
-
-	var err: int = await PavlakaBaker.bake(root, _current, blender, _current.get_bake_opts(), Callable(), cancelled)
-
-	if is_instance_valid(overlay):
-		overlay.queue_free()
+	if _progress_timer:
+		_progress_timer.stop()
 	if err == OK:
 		EditorInterface.mark_scene_as_unsaved()
 	_baking = false
