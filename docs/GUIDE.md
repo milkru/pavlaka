@@ -87,14 +87,12 @@ func _run() -> void:
 `PavlakaBaker.bake(root, lm, blender_path, save_path, opts := {}, cancelled := [])` returns `OK`
 or an error code. To cancel, pass a one element array and set `cancelled[0] = true` from
 elsewhere. Calling it directly skips the plugin's UI (the save dialog and progress strip), which
-makes it a good fit for automation. For example, to bake every node in the scene:
+makes it a good fit for automation.
 
-```gdscript
-for lm in root.find_children("*", "BlenderLightmapGI", true, false):
-    await PavlakaBaker.bake(root, lm, blender, "res://lightmaps/%s.lmbake" % lm.name, lm.get_bake_opts())
-```
-
-Bake them one at a time (await each call). Do not run two at once into the same output folder.
+One call bakes the whole scene (every static mesh with a UV2 under `root`), the same as the
+button, so there is one bake per scene. If you want to bake several scenes in a row, open each
+one in the editor, bake it, save it, then move on. Await each bake and never run two at once
+into the same output folder.
 
 ## Limitations and notes
 
