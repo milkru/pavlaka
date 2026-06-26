@@ -69,10 +69,6 @@ func _run() -> void:
 or an error code. To cancel, pass a one element array and set `cancelled[0] = true` from
 elsewhere.
 
-One call bakes the whole scene, the same as the button, so there is one bake per scene. To bake
-several scenes in a row, open each one in the editor, bake it, save it, then move on. Await each
-bake and never run two at once into the same output folder.
-
 ## Things to watch out for
 
 - **Point and spot lights may not match Godot's brightness.** Directional lights match
