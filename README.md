@@ -20,6 +20,8 @@ compatibility is not a goal. The Blender side uses the long stable bake API and 
   corners and thin geometry than the native lightmapper.
 - **Runs in the background.** The editor stays fully usable while a bake runs. The native bake
   locks the editor behind a modal progress dialog.
+- **Cancel any time.** Press Cancel and the bake stops right away. The native one often ignores
+  the cancel or only reacts after a long delay.
 - **A single oversized mesh will not stop the bake.** If a mesh is too big to fit one page, its
   lightmap is scaled down to fit and a warning is logged, instead of the whole bake aborting the
   way the native one does.
