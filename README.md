@@ -47,6 +47,8 @@ compatibility is not a goal. The Blender side uses the long stable bake API and 
 
 ## Quick start
 
+The workflow is the same as the regular `LightmapGI`, just with a `BlenderLightmapGI` node.
+
 1. Add a **`BlenderLightmapGI`** node to a 3D scene.
 2. Make sure your static meshes have a **UV2** (Import dock, Meshes, Light Baking =
    "Static Lightmaps", then Reimport).
