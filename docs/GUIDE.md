@@ -12,6 +12,7 @@ BlenderLightmapGI node + "Bake Lightmaps"
   -> export the scene's static meshes + lights to a temp glTF
   -> run Blender headless: Cycles bakes IRRADIANCE per mesh (Diffuse, Direct+Indirect,
      Color OFF), denoised, each at its packed chunk size
+  -> stream each finished mesh into the viewport live (in-memory preview) as it bakes
   -> composite the per-mesh bakes into the atlas pages, import as CompressedTexture2DArray
   -> assemble a native LightmapGIData (pages as layers) and assign it
   -> save the .lmbake (next to the scene by default); renders with Godot's LightmapGI runtime

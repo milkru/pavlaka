@@ -258,6 +258,10 @@ def main():
         try:
             bake_one(scene, obj, os.path.join(out_dir, slice_file), size)
             meshes_meta.append({"name": obj.name, "file": slice_file})
+            # drop a marker so Godot can stream this mesh into the live preview before the
+            # whole bake finishes (the .exr is fully written + denoised at this point).
+            with open(os.path.join(out_dir, fname + ".done"), "w") as _mf:
+                json.dump({"name": obj.name, "file": slice_file}, _mf)
         except Exception as e:
             errors.append("%s: %s" % (obj.name, e))
             out("PAVLAKA_BAKE: ERROR baking %s:\n%s" % (obj.name, traceback.format_exc()))

@@ -145,6 +145,17 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 		"--background", "--python", ProjectSettings.globalize_path(BAKE_SCRIPT), "--",
 		glb_abs, work_abs, ProjectSettings.globalize_path(params_path),
 	])
+	# Prepare the atlas page images + bounds up front so finished meshes can be streamed into a
+	# live preview while Blender is still baking the rest.
+	var page_imgs: Array = []
+	for i in n_pages:
+		var d: Vector2i = page_dims[i]
+		page_imgs.append(Image.create(d.x, d.y, false, Image.FORMAT_RGBAF))
+	var bounds := _world_aabb(targets)
+	var composited := {} # mesh name -> true (already blitted into page_imgs)
+	var orig_data: LightmapGIData = lm.light_data # restored if the bake is cancelled
+	_clear_markers(work_abs) # drop any .done markers left by a previous bake in this temp dir
+
 	# Run Blender non-blocking and poll, so the editor stays responsive instead of freezing.
 	# Output is captured via bake.log (create_process can't read stdout); yield each frame.
 	print("pavlaka: running Blender...")
@@ -155,8 +166,19 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 	while OS.is_process_running(pid):
 		if not cancelled.is_empty() and cancelled[0]:
 			OS.kill(pid)
+			lm.light_data = orig_data # undo any live-preview assignment
 			print("pavlaka: bake cancelled")
 			return ERR_SKIP
+		# stream each finished mesh into the live preview the moment its marker appears
+		var streamed := false
+		for done in _read_done_markers(work_abs, composited):
+			if _blit_mesh(page_imgs, place_by_name, work_abs, done["name"], done["file"]):
+				composited[done["name"]] = true
+				streamed = true
+		if streamed:
+			var prev := _make_data(_preview_texes(page_imgs), place_by_name, page_dims,
+				composited.keys(), targets, bounds, 1.0)
+			_assign_data(lm, prev, bounds)
 		await Engine.get_main_loop().process_frame
 
 	# 5. read bake metadata from the work dir. Blender's full log is kept in bake.log; we
@@ -177,25 +199,19 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 	if not bake_errors.is_empty():
 		push_warning("pavlaka: Blender reported %d bake error(s); see bake.log in %s" % [bake_errors.size(), work_abs])
 
-	# 6. composite the per-mesh EXRs into the atlas pages (HDR/linear), blitting each into its
-	# chunk on its assigned page. A gutter was reserved during packing so meshes can't bleed.
-	var page_imgs: Array = []
-	for i in n_pages:
-		var d: Vector2i = page_dims[i]
-		page_imgs.append(Image.create(d.x, d.y, false, Image.FORMAT_RGBAF))
+	# 6. finish compositing: most meshes were streamed into page_imgs during the bake; blit any
+	# that weren't yet (the last marker can arrive right at exit, or a marker could be missed).
 	for m in baked_meshes:
 		var nm: String = m["name"]
+		if composited.has(nm):
+			continue
 		if not place_by_name.has(nm):
 			push_warning("pavlaka: baked mesh '%s' not in packing; skipped" % nm)
 			continue
-		var slice := Image.load_from_file(work_abs.path_join(m["file"]))
-		if slice == null:
+		if not _blit_mesh(page_imgs, place_by_name, work_abs, nm, m["file"]):
 			push_error("pavlaka: failed to read baked slice %s" % m["file"])
 			return ERR_FILE_CANT_READ
-		slice.convert(Image.FORMAT_RGBAF)
-		var pl: Dictionary = place_by_name[nm]
-		var r: Rect2i = pl["rect"]
-		(page_imgs[pl["page"]] as Image).blit_rect(slice, Rect2i(Vector2i.ZERO, slice.get_size()), r.position)
+		composited[nm] = true
 
 	# 7. save each page and import it as a CompressedTexture2DArray (one per page).
 	# Prefer the light import path (update_file + reimport_files): it won't trigger a
@@ -237,38 +253,10 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 			push_error("pavlaka: failed to import baked lightmap pages (see Output)")
 			return ERR_FILE_CANT_READ
 
-	# 8. build the LightmapGIData: the pages as texture layers, each mesh mapped to its page +
-	# sub-rect via add_user's uv_scale (remaps the mesh's [0,1] UV2 into its chunk).
-	var data := LightmapGIData.new()
-	data.set_lightmap_textures(page_texes)
-	data.set_uses_spherical_harmonics(false)
-	var bounds := _world_aabb(targets)
-	# Keep probe points EMPTY so no probe gizmo is drawn. set_capture_data then forces the
-	# RenderingServer bounds to empty, so we re-apply real bounds directly below (and the
-	# BlenderLightmapGI re-applies them on load) — otherwise the instance is culled.
-	data.call("_set_probe_data", {
-		"bounds": bounds,
-		"points": PackedVector3Array(),
-		"sh": PackedColorArray(),
-		"tetrahedra": PackedInt32Array(),
-		"bsp": PackedInt32Array(),
-		"interior": false,
-		"baked_exposure": float(meta.get("baked_exposure", 1.0)),
-		"lightprobe_hash": 0,
-	})
-	for m in baked_meshes:
-		var nm: String = m["name"]
-		var t := _find(targets, nm)
-		if t == null or not place_by_name.has(nm):
-			continue
-		var pl: Dictionary = place_by_name[nm]
-		var r: Rect2i = pl["rect"]
-		# normalize the chunk rect by its own page's dimensions (pages can differ in size)
-		var d: Vector2i = page_dims[pl["page"]]
-		data.add_user(t.path,
-			Rect2(float(r.position.x) / d.x, float(r.position.y) / d.y,
-				float(r.size.x) / d.x, float(r.size.y) / d.y),
-			int(pl["page"]), -1)
+	# 8. build the final LightmapGIData from the imported pages (replaces the live preview).
+	var final_names: Array = baked_meshes.map(func(m): return m["name"])
+	var data := _make_data(page_texes, place_by_name, page_dims, final_names, targets, bounds,
+		float(meta.get("baked_exposure", 1.0)))
 
 	# 9. save .lmbake (to the chosen save_path) and assign
 	var lmbake := save_path
@@ -280,12 +268,7 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 	# externally (like native LightmapGI) instead of embedding the whole LightmapGIData inline.
 	data.take_over_path(lmbake)
 	efs.update_file(lmbake) # let the editor track the new .lmbake file
-	lm.light_data = data
-	# Apply the real bounds to the RenderingServer now (this session) and store them on
-	# the node so they're re-applied on load — without any probe point (hence no gizmo).
-	RenderingServer.lightmap_set_probe_bounds(data.get_rid(), bounds)
-	if lm is BlenderLightmapGI:
-		(lm as BlenderLightmapGI).baked_bounds = bounds
+	_assign_data(lm, data, bounds) # replaces the live preview with the final imported result
 	# drop pages left by a denser previous bake. Done last, after the new pages are imported —
 	# deleting tracked files mid-import corrupts the EditorFileSystem scan and they fail.
 	_cleanup_stale_pages(out_dir, base_name, n_pages)
@@ -295,6 +278,98 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 	print("pavlaka: baked %d mesh(es) into %d page(s) [%s] in %s -> %s"
 		% [data.get_user_count(), n_pages, dims_str, took, lmbake])
 	return OK
+
+
+# Build a LightmapGIData from page textures + per-mesh placements. Shared by the live preview
+# (in-memory textures, the meshes baked so far) and the final result (imported textures, all
+# meshes). Empty probe points -> no probe gizmo; real bounds are applied via the RenderingServer.
+static func _make_data(textures: Array, place_by_name: Dictionary, page_dims: Array,
+		mesh_names: Array, targets: Array[Target], bounds: AABB, exposure: float) -> LightmapGIData:
+	var data := LightmapGIData.new()
+	data.set_lightmap_textures(textures)
+	data.set_uses_spherical_harmonics(false)
+	data.call("_set_probe_data", {
+		"bounds": bounds, "points": PackedVector3Array(), "sh": PackedColorArray(),
+		"tetrahedra": PackedInt32Array(), "bsp": PackedInt32Array(), "interior": false,
+		"baked_exposure": exposure, "lightprobe_hash": 0,
+	})
+	for nm in mesh_names:
+		var t := _find(targets, nm)
+		if t == null or not place_by_name.has(nm):
+			continue
+		var pl: Dictionary = place_by_name[nm]
+		var r: Rect2i = pl["rect"]
+		# normalize the chunk rect by its own page's dimensions (pages can differ in size)
+		var d: Vector2i = page_dims[pl["page"]]
+		data.add_user(t.path, Rect2(float(r.position.x) / d.x, float(r.position.y) / d.y,
+			float(r.size.x) / d.x, float(r.size.y) / d.y), int(pl["page"]), -1)
+	return data
+
+
+# Assign a LightmapGIData to the node and re-apply real bounds (no probe point -> no gizmo).
+static func _assign_data(lm: LightmapGI, data: LightmapGIData, bounds: AABB) -> void:
+	lm.light_data = data
+	RenderingServer.lightmap_set_probe_bounds(data.get_rid(), bounds)
+	if lm is BlenderLightmapGI:
+		(lm as BlenderLightmapGI).baked_bounds = bounds
+
+
+# In-memory Texture2DArray per page (one layer each), for the live preview without importing
+# (avoids the editor-filesystem reimport path mid-bake).
+static func _preview_texes(page_imgs: Array) -> Array:
+	var texes: Array = []
+	for img in page_imgs:
+		var t := Texture2DArray.new()
+		t.create_from_images([img])
+		texes.append(t)
+	return texes
+
+
+# Blit one baked mesh's EXR into its atlas page. Returns false if the file can't be read.
+static func _blit_mesh(page_imgs: Array, place_by_name: Dictionary, work_abs: String,
+		mesh_name: String, file_name: String) -> bool:
+	if not place_by_name.has(mesh_name):
+		return false
+	var slice := Image.load_from_file(work_abs.path_join(file_name))
+	if slice == null:
+		return false
+	slice.convert(Image.FORMAT_RGBAF)
+	var pl: Dictionary = place_by_name[mesh_name]
+	var r: Rect2i = pl["rect"]
+	(page_imgs[pl["page"]] as Image).blit_rect(slice, Rect2i(Vector2i.ZERO, slice.get_size()), r.position)
+	return true
+
+
+# Read .done markers (written by bake.py after each mesh) whose mesh isn't composited yet.
+static func _read_done_markers(work_abs: String, composited: Dictionary) -> Array:
+	var out: Array = []
+	var dir := DirAccess.open(work_abs)
+	if dir == null:
+		return out
+	dir.list_dir_begin()
+	var f := dir.get_next()
+	while f != "":
+		if f.ends_with(".done"):
+			var j = JSON.parse_string(FileAccess.get_file_as_string(work_abs.path_join(f)))
+			if j is Dictionary and j.has("name") and j.has("file") and not composited.has(j["name"]):
+				out.append(j)
+		f = dir.get_next()
+	dir.list_dir_end()
+	return out
+
+
+# Delete .done markers left in the temp dir by a previous bake, so they aren't read as new.
+static func _clear_markers(work_abs: String) -> void:
+	var dir := DirAccess.open(work_abs)
+	if dir == null:
+		return
+	dir.list_dir_begin()
+	var f := dir.get_next()
+	while f != "":
+		if f.ends_with(".done"):
+			dir.remove(f)
+		f = dir.get_next()
+	dir.list_dir_end()
 
 
 static func _dump_blender_log(out_dir: String) -> void:

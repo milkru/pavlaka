@@ -25,6 +25,8 @@ compatibility is not a goal. The Blender side uses the long stable bake API and 
   lightmapper does.
 - **GPU baking by default, CPU optional.** Bakes on the GPU for speed out of the box, and you
   can switch to the CPU for the most consistent results. (The built-in lightmapper is GPU-only.)
+- **Live preview.** Each mesh's lightmap streams into the viewport the moment Blender finishes
+  baking it, so you watch the scene light up progressively instead of waiting for a black box.
 - **Scriptable.** A bake can be triggered from any editor tool script via
   `PavlakaBaker.bake(...)`, so you can batch-bake scenes or automate it.
 
