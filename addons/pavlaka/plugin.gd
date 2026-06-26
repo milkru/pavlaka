@@ -139,6 +139,15 @@ func _build_progress_strip() -> void:
 	_progress_label = Label.new()
 	_progress_label.text = _baking_text(0)
 	_progress_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	# fixed width + left align so the strip never resizes as the dots cycle or the time grows
+	# (a space and a dot aren't the same width in a proportional font, so padding alone won't
+	# keep it stable). Reserve enough for the longest realistic text.
+	_progress_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	var lf := _progress_label.get_theme_font("font")
+	var ls := _progress_label.get_theme_font_size("font_size")
+	if lf != null:
+		_progress_label.custom_minimum_size.x = lf.get_string_size(
+			"Baking Lightmaps...   00 m 00 s", HORIZONTAL_ALIGNMENT_LEFT, -1, ls).x
 	_progress.add_child(_progress_label)
 	_cancel_btn = Button.new()
 	_cancel_btn.text = "Cancel"
@@ -155,11 +164,11 @@ func _build_progress_strip() -> void:
 	_progress.add_child(_progress_timer)
 
 
-# "Baking Lightmaps" + `dots` animated dots (padded to a fixed width so the elapsed time
-# doesn't jitter) + the elapsed time.
+# "Baking Lightmaps" + `dots` animated dots + the elapsed time. The label has a fixed width
+# (see _build_progress_strip), so the changing dot/time width doesn't move anything.
 func _baking_text(dots: int) -> String:
-	var pips := ".".repeat(dots).rpad(3) # e.g. "."→".  ", ".."→".. ", "..."→"..."
-	return "Baking Lightmaps%s   %s" % [pips, _fmt_elapsed((Time.get_ticks_msec() - _bake_start_ms) / 1000)]
+	return "Baking Lightmaps%s   %s" % [".".repeat(dots),
+		_fmt_elapsed((Time.get_ticks_msec() - _bake_start_ms) / 1000)]
 
 
 func _tick_progress() -> void:
