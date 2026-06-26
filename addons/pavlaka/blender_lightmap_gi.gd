@@ -21,7 +21,7 @@ extends LightmapGI
 # own too; we keep it visible and read it in the baker. Mode: 0 Disabled, 1 Scene, 2 Custom
 # Sky, 3 Custom Color.
 
-@export_group("Blender Bake")
+@export_group("Tweaks")
 ## Render the bake on the GPU if a compute device is available (much faster), otherwise fall
 ## back to the CPU. On by default; turn off if GPU baking is unstable on your machine or you
 ## want the most CPU-consistent result.
@@ -44,8 +44,6 @@ extends LightmapGI
 ## Texture Size; and the HDR compression can introduce slight color banding on smooth
 ## gradients. Prefer this only when lightmap VRAM is a real concern.
 @export var compress_lightmaps: bool = false
-
-@export_group("Lights")
 ## Multiplier applied to each Static light's own energy during the bake. Only lights with
 ## Bake Mode = Static contribute; their actual energy and color are used (×this scale).
 ## Tune this if the baked brightness doesn't match the in-editor lighting.
