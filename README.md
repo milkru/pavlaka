@@ -56,10 +56,6 @@ compatibility is not a goal. The Blender side uses the long stable bake API and 
 The **[Guide](docs/GUIDE.md)** covers the full workflow, the node parameters, scripting and the
 known limitations.
 
-## Documentation
-
-The **[Guide](docs/GUIDE.md)** has the usage details, node parameters, scripting and limitations.
-
 ## Acknowledgements
 
 [Blender](https://www.blender.org) is a registered trademark of the Blender Foundation. pavlaka
