@@ -19,7 +19,7 @@ const DEFAULTS := {
 	"max_texture_size": 16384, # LightmapGI's own cap on each atlas page's dimensions
 	"texel_scale": 1.0, # LightmapGI's density multiplier (higher = sharper / more texels)
 	"compress": false, # VRAM-compress pages (smaller, POT-rounded) vs lossless exact-fit
-	"use_gpu": false,  # render the bake on GPU if available, else CPU
+	"use_gpu": true,   # render the bake on GPU if available, else CPU
 	"bounces": 3,      # Cycles diffuse bounces (indirect GI)
 	"bake_margin": 16, # px the bake is dilated past each UV island edge
 	"denoise": true,   # OIDN denoise each page

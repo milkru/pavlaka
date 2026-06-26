@@ -27,8 +27,9 @@ extends LightmapGI
 
 @export_group("Blender Bake")
 ## Render the bake on the GPU if a compute device is available (much faster), otherwise fall
-## back to the CPU. Leave off if GPU baking is unstable on your machine.
-@export var use_gpu: bool = false
+## back to the CPU. On by default; turn off if GPU baking is unstable on your machine or you
+## want the most CPU-consistent result.
+@export var use_gpu: bool = true
 ## Pixels the baked result is dilated past each UV island edge. Higher reduces dark seams and
 ## bleeding between charts at the cost of some atlas space; too low can show black edges.
 @export_range(0, 64) var bake_margin: int = 16
