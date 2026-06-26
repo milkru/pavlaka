@@ -11,6 +11,9 @@ compatibility is not a goal. The Blender side uses the long stable bake API and 
 
 ## Why use this over the built-in LightmapGI?
 
+- **Better looking bakes.** Blender's Cycles is a production path tracer, so the global
+  illumination (bounce light, soft shadows, ambient occlusion) generally looks more accurate
+  and natural than the built-in lightmapper.
 - **It can't crash the editor.** The bake runs in a separate Blender process, so a failed or
   misbehaving bake can't take Godot down with it (the built-in lightmapper sometimes does).
 - **Fewer light leaks.** Cycles' path-traced bake leaks noticeably less light through walls,
