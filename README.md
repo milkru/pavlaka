@@ -4,9 +4,10 @@ Bake Godot lightmaps externally in **Blender (Cycles)** and import them back as 
 **`LightmapGIData`**. A Godot editor plugin that adds a `BlenderLightmapGI` node with a
 "Bake with Blender" button, mirroring the built-in `LightmapGI` workflow.
 
-Targets **Godot 4.7**. Engine internals are version specific, so long term compatibility
-is not a goal. The Blender side uses the long stable bake API and works on **Blender 4.x**
-(developed against 4.1.1).
+Tested on **Godot 4.5 - 4.7** (developed on 4.7); other Godot 4.x versions probably work too,
+they just haven't been tested. Engine internals are version specific, so long term
+compatibility is not a goal. The Blender side uses the long stable bake API and works on
+**Blender 4.x** (developed against 4.1.1).
 
 ## Why use this over the built-in LightmapGI?
 
@@ -43,7 +44,7 @@ Godot owns the UV2; Blender bakes into it. Meshes are packed into one or more at
 
 ## Requirements
 
-- **Godot 4.7**
+- **Godot 4.x** (tested on 4.5 - 4.7)
 - **Blender 4.x** (tested 4.1.1), reachable as an executable on disk
 - Static meshes that have a **UV2** (lightmap) channel
 
