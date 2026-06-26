@@ -205,6 +205,15 @@ def main():
         env_tex.image = bpy.data.images.load(sky)
         wnt.links.new(env_tex.outputs["Color"], bg.inputs[0])
         bg.inputs[1].default_value = 1.0
+        # apply the sky rotation (Godot bakes the panorama unrotated): rotate the env texture's
+        # sampling direction via Texture Coordinate (Generated) -> Mapping -> Environment Texture.
+        sky_rot = PARAMS.get("sky_rotation", [0.0, 0.0, 0.0])
+        if any(sky_rot):
+            tcoord = wnt.nodes.new("ShaderNodeTexCoord")
+            mapping = wnt.nodes.new("ShaderNodeMapping")
+            mapping.inputs["Rotation"].default_value = (sky_rot[0], sky_rot[1], sky_rot[2])
+            wnt.links.new(tcoord.outputs["Generated"], mapping.inputs["Vector"])
+            wnt.links.new(mapping.outputs["Vector"], env_tex.inputs["Vector"])
     else:
         # flat ambient dome (a new world's Background color defaults to near-black, so
         # set a real color and let AMBIENT control dome brightness)

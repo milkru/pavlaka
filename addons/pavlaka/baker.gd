@@ -140,6 +140,7 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 		"denoise": cfg["denoise"],
 		"lights": lights,
 		"sky_panorama": env["sky_panorama"],
+		"sky_rotation": env.get("sky_rotation", [0.0, 0.0, 0.0]),
 		"ambient_color": env["ambient_color"],
 		"ambient_energy": env["ambient_energy"],
 	}
@@ -454,7 +455,11 @@ static func _resolve_environment(root: Node, cfg: Dictionary) -> Dictionary:
 			if e != null:
 				var p := _bake_env_panorama(e)
 				if p != "":
-					return {"sky_panorama": p, "ambient_color": [0.0, 0.0, 0.0], "ambient_energy": 0.0}
+					# environment_bake_panorama bakes the UNROTATED sky, so carry the
+					# Environment's sky_rotation (converted to Blender's frame) to apply in Blender.
+					var rot := _sky_blender_euler(e.sky_rotation)
+					return {"sky_panorama": p, "ambient_color": [0.0, 0.0, 0.0], "ambient_energy": 0.0,
+						"sky_rotation": [rot.x, rot.y, rot.z]}
 			return none
 		2: # CUSTOM_SKY — bake the given Sky resource
 			var sky: Sky = cfg["environment_custom_sky"]
@@ -467,6 +472,19 @@ static func _resolve_environment(root: Node, cfg: Dictionary) -> Dictionary:
 			var lin: Color = (cfg["environment_custom_color"] as Color).srgb_to_linear()
 			return {"sky_panorama": "", "ambient_color": [lin.r, lin.g, lin.b], "ambient_energy": float(cfg["environment_custom_energy"])}
 	return none # DISABLED
+
+
+# Convert Godot's Environment.sky_rotation (Y-up euler) to the equivalent Blender Mapping-node
+# rotation (Z-up, XYZ euler). The rotation basis is conjugated by the Y-up->Z-up axis swap
+# (Godot (x,y,z) -> Blender (x,-z,y)) so the baked sky lines up with how Godot orients it.
+# NOTE: if the sky ends up rotated the wrong way / mirrored, this is the spot to adjust
+# (e.g. use r.inverse(), or flip an axis sign).
+static func _sky_blender_euler(godot_euler: Vector3) -> Vector3:
+	if godot_euler == Vector3.ZERO:
+		return Vector3.ZERO
+	var r := Basis.from_euler(godot_euler)
+	var s := Basis(Vector3(1, 0, 0), Vector3(0, 0, 1), Vector3(0, -1, 0)) # -90° about X
+	return (s * r * s.inverse()).get_euler(EULER_ORDER_XYZ)
 
 
 static func _bake_env_panorama(env: Environment) -> String:

@@ -105,9 +105,6 @@ Bake sequentially (await each one) — don't run two at once into the same outpu
   converted energy but render with Cycles' physical inverse-square falloff (vs Godot's
   range-based one) — an intentional lighting-model difference, not something the plugin
   corrects. Adjust the light's own energy in Godot if you need it brighter or dimmer.
-- **Sky rotation isn't applied.** A baked `WorldEnvironment` sky ignores Godot's
-  `sky_rotation` (negligible for low frequency ambient and AO; get direct sun from a
-  Static `DirectionalLight3D`, not the sky).
 - **Very large meshes get shrunk, not split.** A mesh whose lightmap chunk can't fit one
   `Max Texture Size` page is scaled down to fit (lower density there) and a warning names it.
   Unlike the native lightmapper this never aborts the bake, but for best quality split the
