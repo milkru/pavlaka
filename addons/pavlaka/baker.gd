@@ -175,6 +175,7 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 			if _blit_mesh(page_imgs, place_by_name, work_abs, done["name"], done["file"]):
 				composited[done["name"]] = true
 				streamed = true
+				print("pavlaka: baked %d/%d  %s" % [composited.size(), targets.size(), done["name"]])
 		if streamed:
 			var prev := _make_data(_preview_texes(page_imgs), place_by_name, page_dims,
 				composited.keys(), targets, bounds, 1.0)
@@ -212,6 +213,7 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 			push_error("pavlaka: failed to read baked slice %s" % m["file"])
 			return ERR_FILE_CANT_READ
 		composited[nm] = true
+		print("pavlaka: baked %d/%d  %s" % [composited.size(), targets.size(), nm])
 
 	# 7. save each page and import it as a CompressedTexture2DArray (one per page).
 	# Prefer the light import path (update_file + reimport_files): it won't trigger a
