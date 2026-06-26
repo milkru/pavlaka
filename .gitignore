@@ -1,5 +1,2 @@
 # Godot 4+ editor cache and imported assets (regenerated on open)
 .godot/
-
-# Generated lightmap bakes (re-baked by the plugin)
-/lightmaps/

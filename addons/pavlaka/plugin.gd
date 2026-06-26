@@ -1,12 +1,10 @@
 @tool
 extends EditorPlugin
 ## pavlaka EditorPlugin. Mirrors the built-in LightmapGI workflow: when a
-## BlenderLightmapGI node is selected, a "Bake with Blender" button appears in the 3D
-## editor toolbar and bakes that node's scene using the node's parameters.
-##
-## Blender path resolves from project setting "pavlaka/blender_path", else env
-## PAVLAKA_BLENDER. Headless self-test: set env PAVLAKA_AUTOBAKE=1 (+ PAVLAKA_BLENDER)
-## and launch with --editor --headless to run _autobake() and quit.
+## BlenderLightmapGI node is selected, a "Bake Lightmaps" button appears in the 3D
+## editor toolbar and bakes that node's scene using the node's parameters. The Blender
+## executable resolves from the project setting "pavlaka/blender_path" (auto-detected on
+## enable).
 
 const SETTING_BLENDER := "pavlaka/blender_path"
 
@@ -71,9 +69,6 @@ func _enter_tree() -> void:
 	if not ProjectSettings.settings_changed.is_connected(_update_button):
 		ProjectSettings.settings_changed.connect(_update_button)
 	_on_selection_changed()
-
-	if OS.get_environment("PAVLAKA_AUTOBAKE") != "":
-		call_deferred("_autobake")
 
 
 func _exit_tree() -> void:
@@ -253,10 +248,7 @@ func _on_builtin_vis() -> void:
 
 
 func _blender_path() -> String:
-	var p: String = ProjectSettings.get_setting(SETTING_BLENDER, "")
-	if not p.is_empty():
-		return p
-	return OS.get_environment("PAVLAKA_BLENDER")
+	return ProjectSettings.get_setting(SETTING_BLENDER, "")
 
 
 # Find a Blender executable: first on PATH, then in common install locations.
@@ -401,72 +393,3 @@ func _prompt_save_path(default_path: String) -> String:
 		await Engine.get_main_loop().process_frame
 	dlg.queue_free()
 	return result.path
-
-
-# ---- headless self-test ----------------------------------------------------
-func _autobake() -> void:
-	# wait for the editor's initial filesystem scan to finish, so this represents a
-	# real button click in a settled editor (not a startup-time race)
-	var efs := EditorInterface.get_resource_filesystem()
-	while efs.is_scanning():
-		await Engine.get_main_loop().process_frame
-	for _i in 30:
-		await Engine.get_main_loop().process_frame
-
-	print("PAVLAKA_AUTO: building test scene")
-	var root := Node3D.new()
-	root.name = "BakeScene"
-	get_tree().root.add_child(root)
-
-	_add_quad(root, "Floor", [Vector3(-2, 0, -2), Vector3(2, 0, -2), Vector3(2, 0, 2), Vector3(-2, 0, 2)], Vector3.UP)
-	_add_quad(root, "Roof", [Vector3(-2, 2.2, -2), Vector3(2, 2.2, -2), Vector3(2, 2.2, 2), Vector3(-2, 2.2, 2)], Vector3.UP)
-
-	var cube := MeshInstance3D.new()
-	cube.name = "Occluder"
-	var box := BoxMesh.new(); box.size = Vector3.ONE
-	cube.mesh = box
-	cube.position = Vector3(0.5, 0.7, 0.5)
-	root.add_child(cube); cube.owner = root
-
-	var sun := DirectionalLight3D.new()
-	sun.name = "Sun"; sun.light_energy = 4.0
-	sun.light_bake_mode = Light3D.BAKE_STATIC
-	sun.rotation = Vector3(deg_to_rad(-55), deg_to_rad(35), 0)
-	root.add_child(sun); sun.owner = root
-
-	var we := WorldEnvironment.new()
-	we.name = "WorldEnvironment"
-	var env := Environment.new()
-	env.background_mode = Environment.BG_SKY
-	env.sky = Sky.new()
-	env.sky.sky_material = ProceduralSkyMaterial.new()
-	we.environment = env
-	root.add_child(we); we.owner = root
-
-	var lm := BlenderLightmapGI.new(); lm.name = "BlenderLightmapGI"
-	root.add_child(lm); lm.owner = root
-
-	var err: int = await PavlakaBaker.bake(root, lm, _blender_path(), "res://lightmaps/BakeScene/BakeScene.lmbake", lm.get_bake_opts())
-	print("PAVLAKA_AUTO: bake err=", err,
-		" users=", lm.light_data.get_user_count() if lm.light_data else -1,
-		" textures=", lm.light_data.get_lightmap_textures().size() if lm.light_data else -1)
-	print("PAVLAKA_AUTO: ", "PASS" if err == OK else "FAIL")
-	get_tree().quit(err)
-
-
-func _add_quad(root: Node, mesh_name: String, verts: Array, normal: Vector3) -> void:
-	var mi := MeshInstance3D.new()
-	mi.name = mesh_name
-	mi.gi_mode = GeometryInstance3D.GI_MODE_STATIC
-	var arrays := []
-	arrays.resize(Mesh.ARRAY_MAX)
-	arrays[Mesh.ARRAY_VERTEX] = PackedVector3Array(verts)
-	arrays[Mesh.ARRAY_NORMAL] = PackedVector3Array([normal, normal, normal, normal])
-	var uv := PackedVector2Array([Vector2(0, 0), Vector2(1, 0), Vector2(1, 1), Vector2(0, 1)])
-	arrays[Mesh.ARRAY_TEX_UV] = uv
-	arrays[Mesh.ARRAY_TEX_UV2] = uv
-	arrays[Mesh.ARRAY_INDEX] = PackedInt32Array([0, 1, 2, 0, 2, 3])
-	var am := ArrayMesh.new()
-	am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	mi.mesh = am
-	root.add_child(mi); mi.owner = root
