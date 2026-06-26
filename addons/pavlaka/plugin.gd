@@ -328,12 +328,16 @@ func _on_bake_pressed() -> void:
 	if _progress_timer:
 		_progress_timer.start()
 
+	# Capture the node in a local: _current follows the editor selection, which can change (or
+	# clear) while the async bake runs if the user clicks elsewhere. Use `node` throughout so a
+	# mid-bake selection change can't null it out from under us.
+	var node := _current
 	# remember the node's prior light_data path so we can tell if the bake actually changes
 	# the scene (first bake / different save path) and only then mark it unsaved
-	var prev_data: LightmapGIData = _current.light_data
+	var prev_data: LightmapGIData = node.light_data
 	var prev_path := prev_data.resource_path if prev_data != null else ""
 
-	var err: int = await PavlakaBaker.bake(root, _current, blender, save_path, _current.get_bake_opts(), _cancelled)
+	var err: int = await PavlakaBaker.bake(root, node, blender, save_path, node.get_bake_opts(), _cancelled)
 
 	if _progress_timer:
 		_progress_timer.stop()
@@ -343,7 +347,8 @@ func _on_bake_pressed() -> void:
 	# Mark the scene unsaved only when the assignment changed the scene (the node now points
 	# at a different .lmbake), so a first bake isn't lost on reload. A re-bake reusing the
 	# same path leaves the .tscn unchanged, so it stays clean (no spurious '*').
-	if err == OK and _current.light_data != null and _current.light_data.resource_path != prev_path:
+	if err == OK and is_instance_valid(node) and node.light_data != null \
+			and node.light_data.resource_path != prev_path:
 		EditorInterface.mark_scene_as_unsaved()
 
 
