@@ -428,6 +428,13 @@ static func _gather_into(node: Node, export_root: Node3D) -> void:
 			copy.name = mi.name
 			copy.mesh = mi.mesh
 			copy.transform = mi.global_transform
+			# carry each surface's EFFECTIVE material (material_override > surface override >
+			# mesh material) so Blender bakes with the real albedo/emission — that's what makes
+			# indirect bounces colored and lets emissive surfaces cast light.
+			for s in mi.mesh.get_surface_count():
+				var m := mi.get_active_material(s)
+				if m != null:
+					copy.set_surface_override_material(s, m)
 			export_root.add_child(copy)
 			copy.owner = export_root
 		elif c is Light3D and (c as Light3D).is_visible_in_tree() and (c as Light3D).light_bake_mode == Light3D.BAKE_STATIC:

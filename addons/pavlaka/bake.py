@@ -6,6 +6,10 @@ each target's UV2. Each mesh -> its own denoised linear EXR named after the node
 to the per-mesh chunk size Godot computed from world-space surface area (params "sizes").
 Godot then composites these into one packed lightmap atlas.
 
+Real materials are preserved (the bake-target image node is injected into each mesh's own
+material rather than replacing it), so indirect bounces are colored by surface albedo and
+emissive materials cast light.
+
   blender --background --python bake.py -- <glb> <out_dir> <params.json>
 
 The plugin runs this non-blocking and can't read stdout, so everything is mirrored to
@@ -95,22 +99,42 @@ def denoise_over(image, out_path, size):
     return False
 
 
+def setup_bake_target(me, img, obj_name):
+    """Make this mesh ready to bake into `img` WITHOUT discarding its real materials, so the
+    surface's actual albedo/emission still drive colored indirect bounces. Each material slot
+    gets its own copy (so shared material datablocks aren't disturbed) with the bake-target
+    image node injected and made active; multi-material meshes inject into every slot pointing
+    at the same image. Meshes with no material get a plain default."""
+    if not me.materials:
+        m = bpy.data.materials.new("BakeMat_%s" % obj_name)
+        m.use_nodes = True
+        me.materials.append(m)
+    for i in range(len(me.materials)):
+        m = me.materials[i]
+        if m is None:
+            m = bpy.data.materials.new("BakeMat_%s_%d" % (obj_name, i))
+            m.use_nodes = True
+        else:
+            m = m.copy()  # unique to this mesh
+            if not m.use_nodes:
+                m.use_nodes = True
+        me.materials[i] = m
+        nt = m.node_tree
+        tex = nt.nodes.new("ShaderNodeTexImage")
+        tex.image = img
+        for n in nt.nodes:
+            n.select = False
+        tex.select = True
+        nt.nodes.active = tex
+
+
 def bake_one(scene, obj, slice_path, size):
     me = obj.data
     me.uv_layers.active_index = 1 if len(me.uv_layers) >= 2 else 0
 
     img = bpy.data.images.new("LM_%s" % obj.name, width=size, height=size,
                               float_buffer=True, is_data=True)
-    mat = bpy.data.materials.new("BakeMat_%s" % obj.name)
-    mat.use_nodes = True
-    me.materials.clear()
-    me.materials.append(mat)
-    tex_node = mat.node_tree.nodes.new("ShaderNodeTexImage")
-    tex_node.image = img
-    for n in mat.node_tree.nodes:
-        n.select = False
-    tex_node.select = True
-    mat.node_tree.nodes.active = tex_node
+    setup_bake_target(me, img, obj.name)
 
     bpy.ops.object.select_all(action='DESELECT')
     obj.select_set(True)

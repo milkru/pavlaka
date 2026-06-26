@@ -21,6 +21,11 @@ Godot owns the UV2; Blender bakes into it. Meshes are packed into one or more at
 (area-proportional, like the native lightmapper), composited, and assigned as a single
 `LightmapGIData`.
 
+Each mesh's real material is carried across (its effective material, including
+`material_override`), so indirect light is **colored by surface albedo** (a red wall casts
+red bounce light) and **emissive materials cast light** into the bake. The target's own
+albedo is divided out (Color OFF) and reapplied by Godot at runtime.
+
 ## Usage
 
 1. Add a **`BlenderLightmapGI`** node to your scene (Create Node dialog).
@@ -106,6 +111,3 @@ Bake sequentially (await each one) — don't run two at once into the same outpu
   `Max Texture Size` page is scaled down to fit (lower density there) and a warning names it.
   Unlike the native lightmapper this never aborts the bake, but for best quality split the
   mesh, raise `Max Texture Size`, or lower `Texel Scale`.
-- **No colored indirect bounce.** The bake uses a neutral material per mesh, so a red wall
-  won't cast red bounce light (Godot still applies each surface's albedo to the direct term
-  at runtime; only the bounced color is lost).
