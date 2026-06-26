@@ -35,7 +35,8 @@ const DEFAULTS := {
 class Target:
 	var node: MeshInstance3D
 	var path: NodePath  # relative to the LightmapGI node
-	var name: String
+	var name: String    # the node's name (may collide with other nodes — display only)
+	var key: String     # unique per-target id; used as the export/bake/atlas identifier
 
 
 ## Bake `lm`'s scene. Returns OK or an error code; messages go to the editor log.
@@ -80,11 +81,16 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 			+ "Max Texture Size, or lower texel_scale.") % [nm, max_tex, float(cfg["texel_scale"])])
 	if n_pages > 8:
 		push_warning("pavlaka: bake uses %d atlas pages — lower texel_scale for fewer pages if VRAM is a concern" % n_pages)
-	var place_by_name := {}
-	var size_by_name := {}
+	# key everything by each target's unique key (not its node name, which can collide when
+	# meshes are duplicated) so the bake result maps back to the right chunk/target.
+	var place_by_key := {}
+	var size_by_key := {}
+	var target_by_key := {}
 	for i in targets.size():
-		place_by_name[targets[i].name] = placements[i]
-		size_by_name[targets[i].name] = (placements[i]["rect"] as Rect2i).size.x # chunks are square
+		var k: String = targets[i].key
+		place_by_key[k] = placements[i]
+		size_by_key[k] = (placements[i]["rect"] as Rect2i).size.x # chunks are square
+		target_by_key[k] = targets[i]
 
 	# 3. export the scene (geometry + lights) to a temp glb for Blender.
 	# Build a fresh export tree (copied meshes + lights, in world space) instead of
@@ -95,7 +101,7 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 	DirAccess.make_dir_recursive_absolute(work)
 	var work_abs := ProjectSettings.globalize_path(work)
 	var glb_abs := work_abs.path_join("scene.glb")
-	var export_root := _build_export_scene(root)
+	var export_root := _build_export_scene(root, targets)
 	var n_lights := 0
 	for c in export_root.get_children():
 		if c is Light3D:
@@ -125,7 +131,7 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 	_collect_lights(root, lights)
 	var env := _resolve_environment(root, cfg)
 	var params := {
-		"sizes": size_by_name, # per-mesh square chunk size in px
+		"sizes": size_by_key, # per-mesh square chunk size in px, keyed by unique export name
 		"samples": _samples_for_quality(int(cfg["quality"])),
 		"use_gpu": cfg["use_gpu"],
 		"bounces": cfg["bounces"],
@@ -172,13 +178,15 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 		# stream each finished mesh into the live preview the moment its marker appears
 		var streamed := false
 		for done in _read_done_markers(work_abs, composited):
-			if _blit_mesh(page_imgs, place_by_name, work_abs, done["name"], done["file"]):
-				composited[done["name"]] = true
+			var k: String = done["name"] # bake.py names objects by the unique key
+			if _blit_mesh(page_imgs, place_by_key, work_abs, k, done["file"]):
+				composited[k] = true
 				streamed = true
-				print("pavlaka: baked %d/%d  %s" % [composited.size(), targets.size(), done["name"]])
+				var disp: String = target_by_key[k].name if target_by_key.has(k) else k
+				print("pavlaka: baked %d/%d  %s" % [composited.size(), targets.size(), disp])
 		if streamed:
-			var prev := _make_data(_preview_texes(page_imgs), place_by_name, page_dims,
-				composited.keys(), targets, bounds, 1.0)
+			var prev := _make_data(_preview_texes(page_imgs), place_by_key, page_dims,
+				composited.keys(), target_by_key, bounds, 1.0)
 			_assign_data(lm, prev, bounds)
 		await Engine.get_main_loop().process_frame
 
@@ -203,17 +211,18 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 	# 6. finish compositing: most meshes were streamed into page_imgs during the bake; blit any
 	# that weren't yet (the last marker can arrive right at exit, or a marker could be missed).
 	for m in baked_meshes:
-		var nm: String = m["name"]
-		if composited.has(nm):
+		var k: String = m["name"] # the unique key bake.py named the object by
+		if composited.has(k):
 			continue
-		if not place_by_name.has(nm):
-			push_warning("pavlaka: baked mesh '%s' not in packing; skipped" % nm)
+		if not place_by_key.has(k):
+			push_warning("pavlaka: baked mesh '%s' not in packing; skipped" % k)
 			continue
-		if not _blit_mesh(page_imgs, place_by_name, work_abs, nm, m["file"]):
+		if not _blit_mesh(page_imgs, place_by_key, work_abs, k, m["file"]):
 			push_error("pavlaka: failed to read baked slice %s" % m["file"])
 			return ERR_FILE_CANT_READ
-		composited[nm] = true
-		print("pavlaka: baked %d/%d  %s" % [composited.size(), targets.size(), nm])
+		composited[k] = true
+		var disp: String = target_by_key[k].name if target_by_key.has(k) else k
+		print("pavlaka: baked %d/%d  %s" % [composited.size(), targets.size(), disp])
 
 	# 7. save each page and import it as a CompressedTexture2DArray (one per page).
 	# Prefer the light import path (update_file + reimport_files): it won't trigger a
@@ -256,8 +265,8 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 			return ERR_FILE_CANT_READ
 
 	# 8. build the final LightmapGIData from the imported pages (replaces the live preview).
-	var final_names: Array = baked_meshes.map(func(m): return m["name"])
-	var data := _make_data(page_texes, place_by_name, page_dims, final_names, targets, bounds,
+	var final_keys: Array = baked_meshes.map(func(m): return m["name"])
+	var data := _make_data(page_texes, place_by_key, page_dims, final_keys, target_by_key, bounds,
 		float(meta.get("baked_exposure", 1.0)))
 
 	# 9. save .lmbake (to the chosen save_path) and assign
@@ -285,8 +294,8 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 # Build a LightmapGIData from page textures + per-mesh placements. Shared by the live preview
 # (in-memory textures, the meshes baked so far) and the final result (imported textures, all
 # meshes). Empty probe points -> no probe gizmo; real bounds are applied via the RenderingServer.
-static func _make_data(textures: Array, place_by_name: Dictionary, page_dims: Array,
-		mesh_names: Array, targets: Array[Target], bounds: AABB, exposure: float) -> LightmapGIData:
+static func _make_data(textures: Array, place_by_key: Dictionary, page_dims: Array,
+		keys: Array, target_by_key: Dictionary, bounds: AABB, exposure: float) -> LightmapGIData:
 	var data := LightmapGIData.new()
 	data.set_lightmap_textures(textures)
 	data.set_uses_spherical_harmonics(false)
@@ -295,11 +304,11 @@ static func _make_data(textures: Array, place_by_name: Dictionary, page_dims: Ar
 		"tetrahedra": PackedInt32Array(), "bsp": PackedInt32Array(), "interior": false,
 		"baked_exposure": exposure, "lightprobe_hash": 0,
 	})
-	for nm in mesh_names:
-		var t := _find(targets, nm)
-		if t == null or not place_by_name.has(nm):
+	for k in keys:
+		if not target_by_key.has(k) or not place_by_key.has(k):
 			continue
-		var pl: Dictionary = place_by_name[nm]
+		var t: Target = target_by_key[k]
+		var pl: Dictionary = place_by_key[k]
 		var r: Rect2i = pl["rect"]
 		# normalize the chunk rect by its own page's dimensions (pages can differ in size)
 		var d: Vector2i = page_dims[pl["page"]]
@@ -328,15 +337,15 @@ static func _preview_texes(page_imgs: Array) -> Array:
 
 
 # Blit one baked mesh's EXR into its atlas page. Returns false if the file can't be read.
-static func _blit_mesh(page_imgs: Array, place_by_name: Dictionary, work_abs: String,
-		mesh_name: String, file_name: String) -> bool:
-	if not place_by_name.has(mesh_name):
+static func _blit_mesh(page_imgs: Array, place_by_key: Dictionary, work_abs: String,
+		key: String, file_name: String) -> bool:
+	if not place_by_key.has(key):
 		return false
 	var slice := Image.load_from_file(work_abs.path_join(file_name))
 	if slice == null:
 		return false
 	slice.convert(Image.FORMAT_RGBAF)
-	var pl: Dictionary = place_by_name[mesh_name]
+	var pl: Dictionary = place_by_key[key]
 	var r: Rect2i = pl["rect"]
 	(page_imgs[pl["page"]] as Image).blit_rect(slice, Rect2i(Vector2i.ZERO, slice.get_size()), r.position)
 	return true
@@ -414,6 +423,7 @@ static func _collect(node: Node, lm: LightmapGI, out: Array[Target]) -> void:
 			t.node = mi
 			t.path = lm.get_path_to(mi)
 			t.name = mi.name
+			t.key = "lm%d" % out.size() # unique even when node names collide (duplicated meshes)
 			out.append(t)
 	for c in node.get_children():
 		_collect(c, lm, out)
@@ -421,11 +431,16 @@ static func _collect(node: Node, lm: LightmapGI, out: Array[Target]) -> void:
 
 # Build a flat export scene of copied visible meshes + lights (in world space). Avoids
 # duplicating the live tree (CSG nodes break duplicate()), and only includes what the
-# bake needs. All meshes occlude/bounce; bake.py bakes the ones that carry a UV2.
-static func _build_export_scene(root: Node) -> Node3D:
+# bake needs. All meshes occlude/bounce; bake.py bakes the ones that carry a UV2. Each target
+# mesh copy is named by its unique key (node_to_key) so the bake result maps back even when
+# node names collide; non-target meshes get a unique fallback name so nothing collides in glTF.
+static func _build_export_scene(root: Node, targets: Array[Target]) -> Node3D:
+	var node_to_key := {}
+	for t in targets:
+		node_to_key[t.node] = t.key
 	var export_root := Node3D.new()
 	export_root.name = root.name
-	_gather_into(root, export_root)
+	_gather_into(root, export_root, node_to_key)
 	return export_root
 
 
@@ -495,12 +510,14 @@ static func _collect_lights(node: Node, out: Array) -> void:
 		_collect_lights(c, out)
 
 
-static func _gather_into(node: Node, export_root: Node3D) -> void:
+static func _gather_into(node: Node, export_root: Node3D, node_to_key: Dictionary) -> void:
 	for c in node.get_children():
 		if c is MeshInstance3D and (c as MeshInstance3D).is_visible_in_tree() and (c as MeshInstance3D).mesh != null:
 			var mi := c as MeshInstance3D
 			var copy := MeshInstance3D.new()
-			copy.name = mi.name
+			# targets are named by their unique key; occluders by a unique fallback so glTF
+			# never has to rename a collision (which would break the bake-result mapping).
+			copy.name = node_to_key.get(mi, "occ_%d" % mi.get_instance_id())
 			copy.mesh = mi.mesh
 			copy.transform = mi.global_transform
 			# carry each surface's EFFECTIVE material (material_override > surface override >
@@ -517,7 +534,7 @@ static func _gather_into(node: Node, export_root: Node3D) -> void:
 			lcopy.transform = (c as Light3D).global_transform
 			export_root.add_child(lcopy)
 			lcopy.owner = export_root
-		_gather_into(c, export_root)
+		_gather_into(c, export_root, node_to_key)
 
 
 # map LightmapGI BakeQuality (Low/Medium/High/Ultra) to Cycles samples (denoise cleans up)
@@ -664,12 +681,6 @@ static func _world_aabb(targets: Array[Target]) -> AABB:
 			box = box.merge(world)
 	return box.grow(0.5)
 
-
-static func _find(targets: Array[Target], mesh_name: String) -> Target:
-	for t in targets:
-		if t.name == mesh_name:
-			return t
-	return null
 
 
 # Write the page's .import preset, preserving an existing UID line (so re-bakes keep stable
