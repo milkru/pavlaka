@@ -134,7 +134,11 @@ def setup_device(scene):
     try:
         prefs = bpy.context.preferences.addons['cycles'].preferences
         prefs.get_devices()
-        for backend in ('OPTIX', 'CUDA', 'HIP', 'METAL', 'ONEAPI'):
+        # Prefer CUDA over OptiX on NVIDIA: OptiX uses the GPU's hardware RT cores, whose
+        # intersection precision / self-intersection epsilon differs from the CPU and leaks
+        # light through thin walls, corners and coincident faces. CUDA uses the same software
+        # BVH path as the CPU, so the bake matches CPU results closely (a bit slower than OptiX).
+        for backend in ('CUDA', 'OPTIX', 'HIP', 'METAL', 'ONEAPI'):
             try:
                 prefs.compute_device_type = backend
             except TypeError:
