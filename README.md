@@ -39,7 +39,8 @@ compatibility is not a goal. The Blender side uses the long stable bake API and 
 
 ## Install
 
-1. Copy the `addons/pavlaka/` folder into your project's `addons/`.
+1. Copy this repo's `addons/pavlaka` folder into your project so it lands at
+   `res://addons/pavlaka`.
 2. Open **Project, Project Settings, Plugins** and enable **pavlaka**.
 3. On enable it finds Blender automatically and fills in **Project Settings,
    `pavlaka/blender_path`**. You only need to touch that (search "pavlaka" in Project Settings)
