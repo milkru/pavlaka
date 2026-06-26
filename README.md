@@ -89,6 +89,40 @@ Godot owns the UV2; Blender bakes into it. Meshes are packed into one or more at
 The inherited `LightmapGI` settings (Quality, Bounces, etc.) are hidden. Baking is
 controlled by the parameters above.
 
+## Scripting
+
+The bake is a static coroutine on the global `PavlakaBaker` class, so any editor tool script
+can trigger it directly (this is what the "Bake Lightmaps" button does under the hood). It
+runs in the editor only (it uses the editor filesystem to import the result).
+
+```gdscript
+@tool
+extends EditorScript  # run with File > Run in the script editor
+
+func _run() -> void:
+    var root := EditorInterface.get_edited_scene_root()
+    var lm: BlenderLightmapGI = root.find_child("BlenderLightmapGI", true, false)
+    var blender: String = ProjectSettings.get_setting("pavlaka/blender_path", "")
+    # save_path is the .lmbake; the page EXRs are written beside it
+    var err: int = await PavlakaBaker.bake(
+        root, lm, blender,
+        "res://lightmaps/%s.lmbake" % root.name,
+        lm.get_bake_opts())          # all the node's tweaks; omit for defaults
+    print("bake result: ", err)      # OK (0), or ERR_* / ERR_SKIP if cancelled
+```
+
+`PavlakaBaker.bake(root, lm, blender_path, save_path, opts := {}, cancelled := [])` returns
+`OK` or an error code. To cancel, pass a one-element array and set `cancelled[0] = true` from
+elsewhere. Calling it directly skips the plugin's UI (save dialog, progress strip), so it's
+ideal for automation, e.g. batch-baking every node in the scene:
+
+```gdscript
+for lm in root.find_children("*", "BlenderLightmapGI", true, false):
+    await PavlakaBaker.bake(root, lm, blender, "res://lightmaps/%s.lmbake" % lm.name, lm.get_bake_opts())
+```
+
+Bake sequentially (await each one) — don't run two at once into the same output folder.
+
 ## Limitations / notes
 
 - **Brightness matching isn't automatic.** Each Static light's real energy and color is
