@@ -129,7 +129,7 @@ func _update_button() -> void:
 	_btn.tooltip_text = "" if path_ok else "Set the Blender path in Project Settings → pavlaka/blender_path"
 
 
-# the square blender-icon.svg's viewBox size, used to derive the rasterization scale
+# the square blender-logo.svg's viewBox size, used to derive the rasterization scale
 const _SVG_SIZE := 499.77
 
 
