@@ -19,8 +19,8 @@ is not a goal. The Blender side uses the long stable bake API and works on **Ble
 - **It never hard-fails on a too-big mesh.** A mesh whose lightmap can't fit one page is
   shrunk to fit (with a warning) instead of aborting the whole bake, which the built-in
   lightmapper does.
-- **Optional GPU baking.** Bake on the GPU for a big speed-up, or on the CPU for the most
-  consistent results. (See the note below: the built-in lightmapper is GPU-only.)
+- **GPU baking by default, CPU optional.** Bakes on the GPU for speed out of the box, and you
+  can switch to the CPU for the most consistent results. (The built-in lightmapper is GPU-only.)
 - **Scriptable.** A bake can be triggered from any editor tool script via
   `PavlakaBaker.bake(...)`, so you can batch-bake scenes or automate it.
 
