@@ -480,7 +480,7 @@ static func _resolve_environment(root: Node, cfg: Dictionary) -> Dictionary:
 # Godot's baked panorama is oriented 90° (clockwise, top-down = -Z) from Blender's Environment
 # Texture mapping, so we always add that. NOTE: if the sky is still rotated the wrong way /
 # mirrored, this is the spot to adjust (flip SKY_FORWARD_OFFSET's sign, or use r.inverse()).
-const SKY_FORWARD_OFFSET := -PI / 2.0 # about Blender up (Z); 90° clockwise looking top-down
+const SKY_FORWARD_OFFSET := PI / 2.0 # about Blender up (Z); 90° counter-clockwise looking top-down
 static func _sky_blender_euler(godot_euler: Vector3) -> Vector3:
 	var r := Basis.from_euler(godot_euler)
 	var s := Basis(Vector3(1, 0, 0), Vector3(0, 0, 1), Vector3(0, -1, 0)) # -90° about X
