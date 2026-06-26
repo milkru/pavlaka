@@ -25,7 +25,6 @@ const DEFAULTS := {
 	"indirect_clamp": 0.0, # Cycles indirect sample clamp (0 = off); kills fireflies
 	"denoise": true,   # OIDN denoise each page
 	"quality": 1, # LightmapGI BakeQuality: 0 Low, 1 Medium, 2 High, 3 Ultra
-	"light_energy_scale": 1.0,
 	"environment_mode": 1, # SCENE
 	"environment_custom_sky": null,
 	"environment_custom_color": Color(0.2, 0.2, 0.2),
@@ -133,7 +132,6 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 		"bake_margin": cfg["bake_margin"],
 		"indirect_clamp": cfg["indirect_clamp"],
 		"denoise": cfg["denoise"],
-		"light_energy_scale": cfg["light_energy_scale"],
 		"lights": lights,
 		"sky_panorama": env["sky_panorama"],
 		"ambient_color": env["ambient_color"],

@@ -44,11 +44,6 @@ extends LightmapGI
 ## Texture Size; and the HDR compression can introduce slight color banding on smooth
 ## gradients. Prefer this only when lightmap VRAM is a real concern.
 @export var compress_lightmaps: bool = false
-## Extra multiplier on each Static light's energy during the bake (default 1.0). Only lights
-## with Bake Mode = Static contribute. Directional lights are already calibrated to match
-## Godot's real-time look at 1.0, so leave it there unless you want to push brightness;
-## point/spot lights use a different falloff than Cycles and may need tuning here.
-@export var light_energy_scale: float = 1.0
 
 
 func get_bake_opts() -> Dictionary:
@@ -62,7 +57,6 @@ func get_bake_opts() -> Dictionary:
 		"bake_margin": bake_margin,
 		"indirect_clamp": indirect_clamp,
 		"denoise": use_denoiser, # inherited LightmapGI property
-		"light_energy_scale": light_energy_scale,
 		# these are LightmapGI's own inherited Environment properties
 		"environment_mode": environment_mode,
 		"environment_custom_sky": environment_custom_sky,

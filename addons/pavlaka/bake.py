@@ -42,7 +42,6 @@ DENOISE = bool(PARAMS.get("denoise", True))
 BOUNCES = int(PARAMS.get("bounces", 3))
 AMBIENT = float(PARAMS.get("ambient_energy", 0.2))
 AMBIENT_RGB = PARAMS.get("ambient_color", [1.0, 1.0, 1.0])
-LIGHT_ENERGY_SCALE = float(PARAMS.get("light_energy_scale", 1.0))
 # name -> {"energy", "color":[r,g,b] linear}; used to override imported lights
 LIGHTS = {l["name"]: l for l in PARAMS.get("lights", [])}
 
@@ -212,21 +211,19 @@ def main():
         bg.inputs[0].default_value = (AMBIENT_RGB[0], AMBIENT_RGB[1], AMBIENT_RGB[2], 1.0)
         bg.inputs[1].default_value = AMBIENT
 
-    # override imported lights with the Godot light's actual energy (x scale) and color.
-    # Directional (Sun) lights get an exact pi factor so a Godot directional light bakes to
-    # match its real-time look at light_energy_scale = 1.0. Derivation: Godot pre-multiplies
-    # light energy by pi (light_storage.cpp) and the diffuse BRDF divides by pi, so the value
-    # a lightmap texel must hold is `energy * NdotL`; Cycles' Color-OFF diffuse bake outputs
-    # irradiance/pi = `sun_strength * NdotL / pi`, so sun_strength = energy * pi. Point/spot
-    # use Blender's physical inverse-square falloff (vs Godot's range-based), so no single
-    # constant matches them across distance — they keep raw energy and rely on the manual scale.
+    # override imported lights with the Godot light's actual energy and color. Energy is
+    # multiplied by pi: Godot normalizes every analytic light by pi internally
+    # (light_storage.cpp does `energy *= PI`) and the diffuse BRDF divides by pi, so a
+    # lightmap texel must hold `energy * NdotL`; Cycles' Color-OFF diffuse bake outputs
+    # irradiance/pi, so the light's strength must be `energy * pi` to match. This is the
+    # same energy-intent conversion for all light types. It's exact for directional (clean
+    # irradiance unit, no falloff); point/spot carry the same converted energy but render
+    # with Cycles' physical inverse-square falloff (vs Godot's range-based), which is the
+    # expected lighting-model difference, not something we correct for.
     for obj in bpy.data.objects:
         if obj.type == 'LIGHT' and obj.name in LIGHTS:
             info = LIGHTS[obj.name]
-            e = float(info["energy"]) * LIGHT_ENERGY_SCALE
-            if obj.data.type == 'SUN':
-                e *= 3.141592653589793
-            obj.data.energy = e
+            obj.data.energy = float(info["energy"]) * 3.141592653589793
             col = info["color"]
             obj.data.color = (col[0], col[1], col[2])
 
