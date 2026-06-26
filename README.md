@@ -63,7 +63,7 @@ Godot owns the UV2; Blender bakes into it. Meshes are packed into one or more at
 | Tweaks | `Bounces` | LightmapGI's own bounce count, used as Cycles' diffuse bounces. Higher fills in indirect light more accurately (brighter, softer GI) but bakes slower. 0 = direct light only. |
 | Blender Bake | `use_gpu` | Render the bake on the GPU if a compute device is available (much faster), else fall back to CPU. Turn off if GPU baking is unstable on your machine. |
 | Blender Bake | `bake_margin` | Pixels the baked result is dilated past each UV island edge. Higher reduces dark seams / bleeding between charts; too low can show black edges. |
-| Blender Bake | `denoise` | Run OIDN denoising on each baked page (recommended — low sample counts are noisy). Off only to inspect the raw bake. |
+| Tweaks | `Use Denoiser` | LightmapGI's own denoiser toggle, used to run OIDN denoising on each baked page (recommended; low sample counts are noisy). Off only to inspect the raw bake. |
 | Environment | `Mode` | LightmapGI's own Environment Mode, used for the bake's ambient and sky: **Disabled** (none), **Scene** (bake the scene's `WorldEnvironment` sky to a panorama), **Custom Sky** (bake a given `Sky`), **Custom Color** (flat color). |
 | Environment | `Custom Sky` / `Custom Color` / `Custom Energy` | Used by the Custom Sky and Custom Color modes (energy scales either). |
 | Blender Bake | `compress_lightmaps` | Compress the baked lightmap textures (VRAM compression, ~4× smaller GPU memory). **Off** (default): lossless, pages kept at their exact content-fit size. **On**: ~4× smaller VRAM, but textures are rounded up to a power of two (some wasted space, a page may exceed Max Texture Size) and BC6H can band slightly on HDR. |

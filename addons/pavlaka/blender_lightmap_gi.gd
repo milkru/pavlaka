@@ -32,9 +32,6 @@ extends LightmapGI
 ## Pixels the baked result is dilated past each UV island edge. Higher reduces dark seams and
 ## bleeding between charts at the cost of some atlas space; too low can show black edges.
 @export_range(0, 64) var bake_margin: int = 16
-## Run OIDN denoising on each baked page. Strongly recommended (low sample counts are noisy);
-## turn off only to inspect the raw bake.
-@export var denoise: bool = true
 ## Compress the baked lightmap textures to save GPU memory.
 ##
 ## Off (default): lossless. Each atlas page keeps its exact content fit size and never
@@ -62,7 +59,7 @@ func get_bake_opts() -> Dictionary:
 		"use_gpu": use_gpu,
 		"bounces": bounces, # inherited LightmapGI property; Cycles diffuse bounces
 		"bake_margin": bake_margin,
-		"denoise": denoise,
+		"denoise": use_denoiser, # inherited LightmapGI property
 		"light_energy_scale": light_energy_scale,
 		# these are LightmapGI's own inherited Environment properties
 		"environment_mode": environment_mode,
@@ -100,6 +97,7 @@ var _inherited_props: Dictionary = {}
 # native so it can be inspected/cleared). "Data" is the group header for light_data.
 const _KEEP_VISIBLE := {
 	"quality": true, "texel_scale": true, "max_texture_size": true, "bounces": true,
+	"use_denoiser": true,
 	"environment_mode": true, "environment_custom_sky": true,
 	"environment_custom_color": true, "environment_custom_energy": true,
 	"Data": true, "light_data": true,
