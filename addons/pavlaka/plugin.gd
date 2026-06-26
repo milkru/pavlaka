@@ -49,15 +49,9 @@ func _enter_tree() -> void:
 	_btn = Button.new()
 	_btn.text = "Bake Lightmaps"
 	_btn.pressed.connect(_on_bake_pressed)
-	# the button draws its icon at native size, so use the logo asset matching the editor's
-	# toolbar icon size (16px x editor scale): 16 at 100%, 32 at 200%, etc.
-	var logo := _logo(int(round(16.0 * EditorInterface.get_editor_scale())))
-	if logo != null:
-		_btn.icon = logo
-	else:
-		var theme := EditorInterface.get_editor_theme()
-		if theme != null and theme.has_icon("Bake", "EditorIcons"):
-			_btn.icon = theme.get_icon("Bake", "EditorIcons") # fallback to the built-in bake icon
+	var theme := EditorInterface.get_editor_theme()
+	if theme != null and theme.has_icon("Bake", "EditorIcons"):
+		_btn.icon = theme.get_icon("Bake", "EditorIcons") # the editor's built-in bake icon
 	_btn.hide() # shown only while a BlenderLightmapGI is selected
 	add_control_to_container(CONTAINER_SPATIAL_EDITOR_MENU, _btn)
 	_build_progress_strip()
@@ -124,24 +118,7 @@ func _update_button() -> void:
 	_btn.tooltip_text = "" if path_ok else "Set the Blender path in Project Settings → pavlaka/blender_path"
 
 
-# the square blender-logo.svg's viewBox size, used to derive the rasterization scale
-const _SVG_SIZE := 499.77
-
-
-# Crisp Blender logo rasterized from the vector SVG at exactly px pixels — the same way the
-# engine renders its own icons, so it stays sharp at any editor scale/DPI. Null if missing.
-func _logo(px: int) -> Texture2D:
-	var svg := FileAccess.get_file_as_string(
-		(get_script() as Script).resource_path.get_base_dir().path_join("blender-logo.svg"))
-	if svg.is_empty():
-		return null
-	var img := Image.new()
-	if img.load_svg_from_string(svg, px / _SVG_SIZE) != OK:
-		return null
-	return ImageTexture.create_from_image(img)
-
-
-# build the inline progress strip ([logo] Baking… Ns [Cancel]); hidden until a bake starts
+# build the inline progress strip ([icon] Baking… Ns [Cancel]); hidden until a bake starts
 func _build_progress_strip() -> void:
 	_progress = HBoxContainer.new()
 	# match the bake button's height exactly (it's theme/DPI dependent, so read it, don't
@@ -149,16 +126,14 @@ func _build_progress_strip() -> void:
 	var row_h := _btn.get_combined_minimum_size().y if _btn else 0.0
 	if row_h > 0.0:
 		_progress.custom_minimum_size = Vector2(0, row_h)
-	# small spacer so the logo isn't flush against the strip's left edge
+	# small spacer so the icon isn't flush against the strip's left edge
 	var lead := Control.new()
 	lead.custom_minimum_size = Vector2(6, 0)
 	_progress.add_child(lead)
-	var icon_px := int(round(16.0 * EditorInterface.get_editor_scale())) # match the bake button's icon
-	var logo := _logo(icon_px) # rasterized from the SVG at exactly this size
-	if logo != null:
-		# draw at the texture's native size (16px), centered — same as the button's icon
+	var theme := EditorInterface.get_editor_theme()
+	if theme != null and theme.has_icon("Bake", "EditorIcons"):
 		var icon := TextureRect.new()
-		icon.texture = logo
+		icon.texture = theme.get_icon("Bake", "EditorIcons") # same editor bake icon as the button
 		icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		_progress.add_child(icon)
 	_progress_label = Label.new()

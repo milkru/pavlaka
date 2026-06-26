@@ -56,3 +56,9 @@ limitations.
 ## Documentation
 
 See the **[Guide](docs/GUIDE.md)** for usage, node parameters, scripting, and limitations.
+
+## Acknowledgements
+
+[Blender](https://www.blender.org) is a registered trademark of the Blender Foundation.
+pavlaka is an independent tool that calls Blender as an external application; it is not
+affiliated with, endorsed by, or sponsored by the Blender Foundation.
