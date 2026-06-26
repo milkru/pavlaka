@@ -1,0 +1,110 @@
+# pavlaka Guide
+
+Full usage, node parameters, scripting, and limitations for the pavlaka lightmap baker.
+For the overview, pros, requirements, and install steps, see the
+[README](../README.md).
+
+## How it works
+
+```
+BlenderLightmapGI node + "Bake Lightmaps"
+  -> pack each mesh into atlas pages, sized by its world-space surface area
+  -> export the scene's static meshes + lights to a temp glTF
+  -> run Blender headless: Cycles bakes IRRADIANCE per mesh (Diffuse, Direct+Indirect,
+     Color OFF), denoised, each at its packed chunk size
+  -> composite the per-mesh bakes into the atlas pages, import as CompressedTexture2DArray
+  -> assemble a native LightmapGIData (pages as layers) and assign it
+  -> save the .lmbake (next to the scene by default); renders with Godot's LightmapGI runtime
+```
+
+Godot owns the UV2; Blender bakes into it. Meshes are packed into one or more atlas pages
+(area-proportional, like the native lightmapper), composited, and assigned as a single
+`LightmapGIData`.
+
+## Usage
+
+1. Add a **`BlenderLightmapGI`** node to your scene (Create Node dialog).
+2. Make sure your static meshes have **UV2**. For imported meshes: Import dock →
+   **Meshes → Light Baking = "Static Lightmaps"** → Reimport (Godot generates UV2 and
+   marks them static). Meshes without UV2 are skipped.
+3. Add at least one light and set its **Bake Mode = Static** (only Static lights are
+   baked), or rely on the Environment (scene sky or Custom Color) for an ambient occlusion
+   bake.
+4. Select the `BlenderLightmapGI` and press **Bake with Blender** in the 3D toolbar.
+   A progress dialog shows the stages; **Cancel** aborts the running bake.
+5. After baking, **disable or hide the real time lights** you baked, otherwise they
+   double light the static geometry and wash out the baked result. (Or keep them as fill.)
+
+On the first bake of a node a dialog asks where to save the `.lmbake` (defaulting next to
+the scene); subsequent bakes reuse that path silently, like the native lightmapper.
+
+## Node parameters (`BlenderLightmapGI`)
+
+| Group | Property | Meaning |
+|---|---|---|
+| Tweaks | `Texel Scale` | LightmapGI's own density multiplier. Each mesh's lightmap chunk is sized `sqrt(world surface area) × 10 × texel_scale`, so density is uniform across the scene (no stretching). Higher = sharper / more texels / more pages. Tune to your scene's scale. |
+| Tweaks | `Max Texture Size` | LightmapGI's own cap on each atlas page's dimensions. Pages grow to fit their content but never exceed this in either dimension, opening a new page when they would (multi-page, like the native lightmapper). A mesh whose chunk can't fit one page is shrunk to fit and a warning is logged. |
+| Tweaks | `Quality` | LightmapGI's own Quality dropdown (Low/Medium/High/Ultra), mapped to Cycles samples (64/128/256/512; denoised afterward). |
+| Tweaks | `Bounces` | LightmapGI's own bounce count, used as Cycles' diffuse bounces. Higher fills in indirect light more accurately (brighter, softer GI) but bakes slower. 0 = direct light only. |
+| Tweaks | `Use Denoiser` | LightmapGI's own denoiser toggle, used to run OIDN denoising on each baked page (recommended; low sample counts are noisy). Off only to inspect the raw bake. |
+| Environment | `Mode` | LightmapGI's own Environment Mode, used for the bake's ambient and sky: **Disabled** (none), **Scene** (bake the scene's `WorldEnvironment` sky to a panorama), **Custom Sky** (bake a given `Sky`), **Custom Color** (flat color). |
+| Environment | `Custom Sky` / `Custom Color` / `Custom Energy` | Used by the Custom Sky and Custom Color modes (energy scales either). |
+| Blender Bake | `use_gpu` | Render the bake on the GPU if a compute device is available (much faster), else fall back to CPU. **On by default.** Turn off if GPU baking is unstable on your machine or you want the most CPU-consistent result. |
+| Blender Bake | `bake_margin` | Pixels the baked result is dilated past each UV island edge. Higher reduces dark seams / bleeding between charts; too low can show black edges. |
+| Blender Bake | `compress_lightmaps` | Compress the baked lightmap textures (VRAM compression, ~4× smaller GPU memory). **Off** (default): lossless, pages kept at their exact content-fit size. **On**: ~4× smaller VRAM, but textures are rounded up to a power of two (some wasted space, a page may exceed Max Texture Size) and BC6H can band slightly on HDR. |
+| Lights | `light_energy_scale` | Multiplier on each **Static** light's own energy and color during the bake (only `Bake Mode = Static` lights contribute). Tune if baked brightness doesn't match the in-editor lighting. |
+
+The other inherited `LightmapGI` settings (Bias, Gen Probes, etc.) are hidden, since baking
+is controlled by the parameters above.
+
+## Scripting
+
+The bake is a static coroutine on the global `PavlakaBaker` class, so any editor tool script
+can trigger it directly (this is what the "Bake Lightmaps" button does under the hood). It
+runs in the editor only (it uses the editor filesystem to import the result).
+
+```gdscript
+@tool
+extends EditorScript  # run with File > Run in the script editor
+
+func _run() -> void:
+    var root := EditorInterface.get_edited_scene_root()
+    var lm: BlenderLightmapGI = root.find_child("BlenderLightmapGI", true, false)
+    var blender: String = ProjectSettings.get_setting("pavlaka/blender_path", "")
+    # save_path is the .lmbake; the page EXRs are written beside it
+    var err: int = await PavlakaBaker.bake(
+        root, lm, blender,
+        "res://lightmaps/%s.lmbake" % root.name,
+        lm.get_bake_opts())          # all the node's tweaks; omit for defaults
+    print("bake result: ", err)      # OK (0), or ERR_* / ERR_SKIP if cancelled
+```
+
+`PavlakaBaker.bake(root, lm, blender_path, save_path, opts := {}, cancelled := [])` returns
+`OK` or an error code. To cancel, pass a one-element array and set `cancelled[0] = true` from
+elsewhere. Calling it directly skips the plugin's UI (save dialog, progress strip), so it's
+ideal for automation, e.g. batch-baking every node in the scene:
+
+```gdscript
+for lm in root.find_children("*", "BlenderLightmapGI", true, false):
+    await PavlakaBaker.bake(root, lm, blender, "res://lightmaps/%s.lmbake" % lm.name, lm.get_bake_opts())
+```
+
+Bake sequentially (await each one) — don't run two at once into the same output folder.
+
+## Limitations / notes
+
+- **Brightness matching isn't automatic.** Each Static light's real energy and color is
+  used, but Godot's energy is dimensionless while Cycles uses physical units, so absolute
+  brightness may not match the viewport. Tune `light_energy_scale`. **Point and spot**
+  lights match least well, because Cycles' inverse square falloff differs from Godot's
+  model; directional lights are the well behaved case.
+- **Sky rotation isn't applied.** A baked `WorldEnvironment` sky ignores Godot's
+  `sky_rotation` (negligible for low frequency ambient and AO; get direct sun from a
+  Static `DirectionalLight3D`, not the sky).
+- **Very large meshes get shrunk, not split.** A mesh whose lightmap chunk can't fit one
+  `Max Texture Size` page is scaled down to fit (lower density there) and a warning names it.
+  Unlike the native lightmapper this never aborts the bake, but for best quality split the
+  mesh, raise `Max Texture Size`, or lower `Texel Scale`.
+- **No colored indirect bounce.** The bake uses a neutral material per mesh, so a red wall
+  won't cast red bounce light (Godot still applies each surface's albedo to the direct term
+  at runtime; only the bounced color is lost).
