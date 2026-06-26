@@ -58,7 +58,7 @@ the scene); subsequent bakes reuse that path silently, like the native lightmapp
 | Blender Bake | `bake_margin` | Pixels the baked result is dilated past each UV island edge. Higher reduces dark seams / bleeding between charts; too low can show black edges. |
 | Blender Bake | `indirect_clamp` | Clamp the brightness of individual indirect light samples to kill fireflies (bright speckle noise the denoiser can't fully remove). `0` = off. A small value like `10` cleans up noisy interior bakes at a tiny cost in indirect brightness. |
 | Blender Bake | `compress_lightmaps` | Compress the baked lightmap textures (VRAM compression, ~4× smaller GPU memory). **Off** (default): lossless, pages kept at their exact content-fit size. **On**: ~4× smaller VRAM, but textures are rounded up to a power of two (some wasted space, a page may exceed Max Texture Size) and BC6H can band slightly on HDR. |
-| Lights | `light_energy_scale` | Multiplier on each **Static** light's own energy and color during the bake (only `Bake Mode = Static` lights contribute). Tune if baked brightness doesn't match the in-editor lighting. |
+| Tweaks | `light_energy_scale` | Extra multiplier on each **Static** light's energy during the bake (default 1.0; only `Bake Mode = Static` lights contribute). Directional lights are already calibrated to match Godot's real-time look at 1.0; point/spot lights use a different falloff than Cycles and may need tuning here. |
 
 The other inherited `LightmapGI` settings (Bias, Gen Probes, etc.) are hidden, since baking
 is controlled by the parameters above.
@@ -99,11 +99,11 @@ Bake sequentially (await each one) — don't run two at once into the same outpu
 
 ## Limitations / notes
 
-- **Brightness matching isn't automatic.** Each Static light's real energy and color is
-  used, but Godot's energy is dimensionless while Cycles uses physical units, so absolute
-  brightness may not match the viewport. Tune `light_energy_scale`. **Point and spot**
-  lights match least well, because Cycles' inverse square falloff differs from Godot's
-  model; directional lights are the well behaved case.
+- **Point/spot brightness isn't exact.** Directional lights are calibrated to match Godot's
+  real-time look automatically (the bake applies the exact `π` factor that relates Godot's
+  energy convention to Cycles' irradiance bake), so they need no tuning. **Point and spot**
+  lights can't be matched by a single constant because Cycles' physical inverse-square
+  falloff differs in shape from Godot's range-based model; tune `light_energy_scale` for them.
 - **Sky rotation isn't applied.** A baked `WorldEnvironment` sky ignores Godot's
   `sky_rotation` (negligible for low frequency ambient and AO; get direct sun from a
   Static `DirectionalLight3D`, not the sky).
