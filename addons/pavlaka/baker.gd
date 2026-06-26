@@ -1,18 +1,13 @@
 @tool
 class_name PavlakaBaker
 extends RefCounted
-## Core pavlaka pipeline (editor-context): gather a scene's static lightmapped meshes,
-## export to glb, bake in Blender headless, import the per-mesh EXR slices, build a
-## LightmapGIData, save it as .lmbake, and assign it to a LightmapGI node.
-##
-## Every stage here is the proven POC pipeline; this just orchestrates it. Designed to be
-## callable headlessly (no UI) so it can be verified end-to-end.
+## Editor-side bake pipeline: collect static UV2 meshes, export to glb, bake in headless
+## Blender, composite the EXR slices into a LightmapGIData, save .lmbake, assign it. No UI.
 
-# bake.py ships inside the addon (addons live at the fixed res://addons/<name>/ path),
-# so the plugin is self-contained: copying addons/pavlaka/ into any project is enough.
+# bake.py ships in the addon, so copying addons/pavlaka/ into any project is enough.
 const BAKE_SCRIPT := "res://addons/pavlaka/bake.py"
 
-# texels per world unit at texel_scale = 1.0 — chunk side px = sqrt(area) * this * texel_scale
+# texels per world unit at texel_scale = 1.0; chunk side px = sqrt(area) * this * texel_scale
 const BASE_DENSITY := 10.0
 
 const DEFAULTS := {
@@ -35,18 +30,15 @@ const DEFAULTS := {
 class Target:
 	var node: MeshInstance3D
 	var path: NodePath  # relative to the LightmapGI node
-	var name: String    # the node's name (may collide with other nodes — display only)
+	var name: String    # the node's name (may collide with other nodes; display only)
 	var key: String     # unique per-target id; used as the export/bake/atlas identifier
 
 
-## Bake `lm`'s scene. Returns OK or an error code; messages go to the editor log.
-## `save_path` is the .lmbake file to write (the page EXRs go beside it, named after it).
-## `cancelled` (optional) is a single-element Array; set cancelled[0]=true to abort the
-## bake — the running Blender process is killed and ERR_SKIP is returned.
+## Bake `lm`'s scene to `save_path` (.lmbake; page EXRs go beside it). Returns OK or an error.
+## `cancelled` is an optional [bool]: set cancelled[0] = true to abort (returns ERR_SKIP).
 static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: String, opts: Dictionary = {}, cancelled: Array = []) -> int:
 	var cfg := DEFAULTS.duplicate()
-	for k in opts:
-		cfg[k] = opts[k]
+	cfg.merge(opts, true)
 
 	if blender_path.is_empty() or not FileAccess.file_exists(blender_path):
 		push_error("pavlaka: Blender executable not found: '%s'" % blender_path)
@@ -63,10 +55,7 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 	print("pavlaka: %d lightmap target(s): %s" % [targets.size(),
 		targets.map(func(t): return t.name)])
 
-	# 2. pack the atlas pages: each mesh gets a square chunk sized by its world-space surface
-	# area at the chosen texel density, shelf-packed into pages that grow to fit but never
-	# exceed max_texture_size (see _pack_pages). Done before baking so each mesh can be baked
-	# at its exact chunk size.
+	# 2. pack the atlas before baking, so each mesh bakes at its exact chunk size (see _pack_pages)
 	var max_tex := int(cfg["max_texture_size"])
 	var pack := _pack_pages(targets, max_tex, float(cfg["texel_scale"]))
 	var page_dims: Array = pack["page_dims"] # Vector2i per page
@@ -81,8 +70,7 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 			+ "Max Texture Size, or lower texel_scale.") % [nm, max_tex, float(cfg["texel_scale"])])
 	if n_pages > 8:
 		push_warning("pavlaka: bake uses %d atlas pages — lower texel_scale for fewer pages if VRAM is a concern" % n_pages)
-	# key everything by each target's unique key (not its node name, which can collide when
-	# meshes are duplicated) so the bake result maps back to the right chunk/target.
+	# index by unique key (node names can collide on duplicated meshes) so results map back
 	var place_by_key := {}
 	var size_by_key := {}
 	var target_by_key := {}
@@ -92,21 +80,15 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 		size_by_key[k] = (placements[i]["rect"] as Rect2i).size.x # chunks are square
 		target_by_key[k] = targets[i]
 
-	# 3. export the scene (geometry + lights) to a temp glb for Blender.
-	# Build a fresh export tree (copied meshes + lights, in world space) instead of
-	# duplicating the live scene: duplicate() chokes on CSG nodes ("child disappeared
-	# while duplicating") which silently dropped lights. This also naturally excludes
-	# hidden nodes (so no required KHR_node_visibility extension older Blenders reject).
+	# 3. export geometry + lights to a temp glb. Build a fresh world-space copy tree, not
+	# duplicate() (it breaks on CSG nodes and drops lights); this also skips hidden nodes.
 	var work := "user://pavlaka_tmp"
 	DirAccess.make_dir_recursive_absolute(work)
 	var work_abs := ProjectSettings.globalize_path(work)
 	var glb_abs := work_abs.path_join("scene.glb")
-	var export_root := _build_export_scene(root, targets)
-	var n_lights := 0
-	for c in export_root.get_children():
-		if c is Light3D:
-			n_lights += 1
-	if n_lights == 0:
+	var lights: Array = [] # filled with each exported light's {name, energy, color}
+	var export_root := _build_export_scene(root, targets, lights)
+	if lights.is_empty():
 		print("pavlaka: no Static lights found — baking ambient only. Set a light's Bake Mode to Static to include it in the bake.")
 	var doc := GLTFDocument.new()
 	var state := GLTFState.new()
@@ -118,17 +100,13 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 		push_error("pavlaka: glTF export failed (%d)" % err)
 		return err
 
-	# 4. run Blender headless: bake each mesh into its own EXR at its chunk size.
-	# Intermediates (per-mesh EXRs + baked.json + bake.log) go to the temp work dir; the
-	# final pages + .lmbake go beside the chosen save_path, named after it.
+	# 4. run Blender headless. Intermediates go to the temp work dir; final pages + .lmbake go
+	# beside save_path.
 	var out_dir := save_path.get_base_dir()
 	var base_name := save_path.get_file().get_basename()
-	# if the output folder is brand new, the EditorFileSystem doesn't know it yet, so we must
-	# scan (not reimport_files) to import the pages — tracked below to pick the right path.
+	# a brand-new output folder needs a full scan (not reimport_files) to import the pages
 	var dir_was_new := not DirAccess.dir_exists_absolute(out_dir)
 	DirAccess.make_dir_recursive_absolute(out_dir)
-	var lights: Array = []
-	_collect_lights(root, lights)
 	var env := _resolve_environment(root, cfg)
 	var params := {
 		"sizes": size_by_key, # per-mesh square chunk size in px, keyed by unique export name
@@ -152,8 +130,7 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 		"--background", "--python", ProjectSettings.globalize_path(BAKE_SCRIPT), "--",
 		glb_abs, work_abs, ProjectSettings.globalize_path(params_path),
 	])
-	# Prepare the atlas page images + bounds up front so finished meshes can be streamed into a
-	# live preview while Blender is still baking the rest.
+	# atlas page images, prepared up front so finished meshes stream into a live preview
 	var page_imgs: Array = []
 	for i in n_pages:
 		var d: Vector2i = page_dims[i]
@@ -163,8 +140,7 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 	var orig_data: LightmapGIData = lm.light_data # restored if the bake is cancelled
 	_clear_markers(work_abs) # drop any .done markers left by a previous bake in this temp dir
 
-	# Run Blender non-blocking and poll, so the editor stays responsive instead of freezing.
-	# Output is captured via bake.log (create_process can't read stdout); yield each frame.
+	# run Blender non-blocking, polling each frame so the editor stays responsive (logs to bake.log)
 	print("pavlaka: running Blender...")
 	var pid := OS.create_process(blender_path, args)
 	if pid <= 0:
@@ -191,8 +167,7 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 			_assign_data(lm, prev, bounds)
 		await Engine.get_main_loop().process_frame
 
-	# 5. read bake metadata from the work dir. Blender's full log is kept in bake.log; we
-	# only echo it to the Godot console when something actually went wrong.
+	# 5. read bake metadata; only dump bake.log to the console if something went wrong
 	var meta_str := FileAccess.get_file_as_string(work + "/baked.json")
 	if meta_str.is_empty():
 		_dump_blender_log(work_abs)
@@ -209,8 +184,7 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 	if not bake_errors.is_empty():
 		push_warning("pavlaka: Blender reported %d bake error(s); see bake.log in %s" % [bake_errors.size(), work_abs])
 
-	# 6. finish compositing: most meshes were streamed into page_imgs during the bake; blit any
-	# that weren't yet (the last marker can arrive right at exit, or a marker could be missed).
+	# 6. blit any meshes not already streamed in during the bake (last marker can land at exit)
 	for m in baked_meshes:
 		var k: String = m["name"] # the unique key bake.py named the object by
 		if composited.has(k):
@@ -225,10 +199,8 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 		var disp: String = target_by_key[k].name if target_by_key.has(k) else k
 		print("pavlaka: baked %d/%d  %s" % [composited.size(), targets.size(), disp])
 
-	# 7. save each page and import it as a CompressedTexture2DArray (one per page).
-	# Prefer the light import path (update_file + reimport_files): it won't trigger a
-	# project-wide script-class rescan that would reload addon scripts mid-bake. Fall back to
-	# a full scan only for brand-new files the EditorFileSystem doesn't know yet.
+	# 7. save + import each page as a CompressedTexture2DArray. Prefer update_file + reimport_files
+	# (no project-wide rescan that'd reload addon scripts mid-bake); fall back to scan for new dirs.
 	var efs := EditorInterface.get_resource_filesystem()
 	var page_paths := PackedStringArray()
 	for i in n_pages:
@@ -240,16 +212,12 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 		efs.update_file(pp)
 		page_paths.append(pp)
 	var page_texes: Array = []
-	# In an already-tracked folder, update_file + reimport_files imports the pages
-	# synchronously — reliable whether new or re-baked (and, unlike a scan, it works even when
-	# another lightmap already exists in the folder). A brand-new folder isn't known to the
-	# EditorFileSystem yet, so reimport_files would error there; scan instead (below).
+	# tracked folder: reimport_files imports synchronously. New folder isn't tracked, so scan below.
 	if not dir_was_new:
 		efs.reimport_files(page_paths)
 		page_texes = _load_pages(page_paths)
 	if page_texes.is_empty():
-		# brand-new (or still-unknown) folder: rescan so the EditorFileSystem discovers and
-		# imports the pages, then load.
+		# new/unknown folder: rescan so the EditorFileSystem discovers and imports the pages
 		var scanned := [false]
 		var on_changed := func(): scanned[0] = true
 		efs.filesystem_changed.connect(on_changed)
@@ -276,13 +244,11 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 	if err != OK:
 		push_error("pavlaka: saving .lmbake failed (%d)" % err)
 		return err
-	# Link the in-memory resource to the saved file so the scene references the .lmbake
-	# externally (like native LightmapGI) instead of embedding the whole LightmapGIData inline.
+	# link the resource to its file so the scene references .lmbake externally, not inline
 	data.take_over_path(lmbake)
 	efs.update_file(lmbake) # let the editor track the new .lmbake file
 	_assign_data(lm, data, bounds) # replaces the live preview with the final imported result
-	# drop pages left by a denser previous bake. Done last, after the new pages are imported —
-	# deleting tracked files mid-import corrupts the EditorFileSystem scan and they fail.
+	# drop pages from a denser previous bake. Done last; deleting mid-import corrupts the scan.
 	_cleanup_stale_pages(out_dir, base_name, n_pages)
 	var secs := (Time.get_ticks_msec() - bake_start) / 1000
 	var took := ("%d m %d s" % [secs / 60, secs % 60]) if secs >= 60 else ("%d s" % secs)
@@ -292,14 +258,15 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 	return OK
 
 
-# Build a LightmapGIData from page textures + per-mesh placements. Shared by the live preview
-# (in-memory textures, the meshes baked so far) and the final result (imported textures, all
-# meshes). Empty probe points -> no probe gizmo; real bounds are applied via the RenderingServer.
+# Build a LightmapGIData from page textures + placements. Used for both the live preview and
+# the final result. Empty probe points = no gizmo; bounds are applied via the RenderingServer.
 static func _make_data(textures: Array, place_by_key: Dictionary, page_dims: Array,
 		keys: Array, target_by_key: Dictionary, bounds: AABB, exposure: float) -> LightmapGIData:
 	var data := LightmapGIData.new()
 	data.set_lightmap_textures(textures)
 	data.set_uses_spherical_harmonics(false)
+	# _set_probe_data is private (no public setter exists); it's the only way to seed bounds
+	# and exposure without baking probes. Watch for renames across Godot versions.
 	data.call("_set_probe_data", {
 		"bounds": bounds, "points": PackedVector3Array(), "sh": PackedColorArray(),
 		"tetrahedra": PackedInt32Array(), "bsp": PackedInt32Array(), "interior": false,
@@ -326,8 +293,7 @@ static func _assign_data(lm: LightmapGI, data: LightmapGIData, bounds: AABB) -> 
 		(lm as BlenderLightmapGI).baked_bounds = bounds
 
 
-# In-memory Texture2DArray per page (one layer each), for the live preview without importing
-# (avoids the editor-filesystem reimport path mid-bake).
+# In-memory Texture2DArray per page for the live preview, skipping the reimport path.
 static func _preview_texes(page_imgs: Array) -> Array:
 	var texes: Array = []
 	for img in page_imgs:
@@ -390,8 +356,7 @@ static func _dump_blender_log(out_dir: String) -> void:
 		print("pavlaka: --- Blender log ---\n%s\npavlaka: --- end ---" % log_txt)
 
 
-# Load each page texture fresh from disk. Returns [] if any isn't importable yet, so the
-# caller can fall back to a full scan.
+# Load each page fresh from disk. Returns [] if any isn't importable yet (caller then scans).
 static func _load_pages(paths: PackedStringArray) -> Array:
 	var texes: Array = []
 	for p in paths:
@@ -402,8 +367,7 @@ static func _load_pages(paths: PackedStringArray) -> Array:
 	return texes
 
 
-# Remove page EXRs (+ .import) left by a previous, denser bake that needed more pages, so the
-# folder stays tidy (the new bake wrote pages 0..n_pages-1).
+# Remove page EXRs (+ .import) past n_pages, left by a denser previous bake.
 static func _cleanup_stale_pages(out_dir: String, base_name: String, n_pages: int) -> void:
 	var stale := PackedStringArray()
 	var i := n_pages
@@ -430,56 +394,49 @@ static func _collect(node: Node, lm: LightmapGI, out: Array[Target]) -> void:
 		_collect(c, lm, out)
 
 
-# Build a flat export scene of copied visible meshes + lights (in world space). Avoids
-# duplicating the live tree (CSG nodes break duplicate()), and only includes what the
-# bake needs. All meshes occlude/bounce; bake.py bakes the ones that carry a UV2. Each target
-# mesh copy is named by its unique key (node_to_key) so the bake result maps back even when
-# node names collide; non-target meshes get a unique fallback name so nothing collides in glTF.
-static func _build_export_scene(root: Node, targets: Array[Target]) -> Node3D:
+# Build a flat world-space export scene of visible meshes + static lights. Each mesh copy is
+# named by a unique key so results map back despite name collisions; bake.py bakes the ones
+# with a UV2. `out_lights` gets each light's {name (key), energy, color} for bake.py to match.
+static func _build_export_scene(root: Node, targets: Array[Target], out_lights: Array) -> Node3D:
 	var node_to_key := {}
 	for t in targets:
 		node_to_key[t.node] = t.key
 	var export_root := Node3D.new()
 	export_root.name = root.name
-	_gather_into(root, export_root, node_to_key)
+	_gather_into(root, export_root, node_to_key, out_lights)
 	return export_root
 
 
-# Resolve the Environment mode into bake params: either a sky panorama path, or a flat
-# ambient color+energy. Mirrors LightmapGI's Environment Mode.
+# Resolve the Environment mode into bake params: a sky panorama path or flat ambient color+energy.
 static func _resolve_environment(root: Node, cfg: Dictionary) -> Dictionary:
 	var none := {"sky_panorama": "", "ambient_color": [0.0, 0.0, 0.0], "ambient_energy": 0.0}
 	match int(cfg["environment_mode"]):
-		1: # SCENE — bake the scene's WorldEnvironment (sky or background)
+		1: # SCENE: bake the scene's WorldEnvironment (sky or background)
 			var e := _find_environment(root)
 			if e != null:
 				var p := _bake_env_panorama(e)
 				if p != "":
-					# environment_bake_panorama bakes the UNROTATED sky, so carry the
-					# Environment's sky_rotation (converted to Blender's frame) to apply in Blender.
+					# the panorama bakes unrotated, so pass sky_rotation (in Blender's frame) to apply there
 					var rot := _sky_blender_euler(e.sky_rotation)
 					return {"sky_panorama": p, "ambient_color": [0.0, 0.0, 0.0], "ambient_energy": 0.0,
 						"sky_rotation": [rot.x, rot.y, rot.z]}
 			return none
-		2: # CUSTOM_SKY — bake the given Sky resource
+		2: # CUSTOM_SKY: bake the given Sky resource
 			var sky: Sky = cfg["environment_custom_sky"]
 			if sky != null:
 				var p := _bake_sky_resource(sky, float(cfg["environment_custom_energy"]))
 				if p != "":
 					return {"sky_panorama": p, "ambient_color": [0.0, 0.0, 0.0], "ambient_energy": 0.0}
 			return none
-		3: # CUSTOM_COLOR — flat ambient
+		3: # CUSTOM_COLOR: flat ambient
 			var lin: Color = (cfg["environment_custom_color"] as Color).srgb_to_linear()
 			return {"sky_panorama": "", "ambient_color": [lin.r, lin.g, lin.b], "ambient_energy": float(cfg["environment_custom_energy"])}
 	return none # DISABLED
 
 
-# Convert Godot's Environment.sky_rotation (Y-up euler) to the equivalent Blender Mapping-node
-# rotation (Z-up, XYZ euler). The rotation basis is conjugated by the Y-up->Z-up axis swap
-# (Godot (x,y,z) -> Blender (x,-z,y)), then a constant offset aligns the equirect "forward":
-# Godot's baked panorama is oriented 90° (clockwise, top-down = -Z) from Blender's Environment
-# Texture mapping, so we always add that. NOTE: if the sky is still rotated the wrong way /
-# mirrored, this is the spot to adjust (flip SKY_FORWARD_OFFSET's sign, or use r.inverse()).
+# Convert Godot's sky_rotation (Y-up euler) to Blender's Mapping rotation (Z-up XYZ): conjugate
+# by the Y-up->Z-up axis swap, then add SKY_FORWARD_OFFSET to align the equirect forward.
+# If the sky looks rotated/mirrored, adjust here (flip the offset's sign or use r.inverse()).
 const SKY_FORWARD_OFFSET := PI / 2.0 # about Blender up (Z); 90° counter-clockwise looking top-down
 static func _sky_blender_euler(godot_euler: Vector3) -> Vector3:
 	var r := Basis.from_euler(godot_euler)
@@ -518,30 +475,16 @@ static func _find_environment(node: Node) -> Environment:
 	return null
 
 
-# collect Static, visible lights' actual energy + linear color (matched by node name in
-# bake.py) so the bake uses real per-light values instead of a fixed energy
-static func _collect_lights(node: Node, out: Array) -> void:
-	for c in node.get_children():
-		if c is Light3D and (c as Light3D).is_visible_in_tree() and (c as Light3D).light_bake_mode == Light3D.BAKE_STATIC:
-			var l := c as Light3D
-			var lin := l.light_color.srgb_to_linear()
-			out.append({"name": l.name, "energy": l.light_energy, "color": [lin.r, lin.g, lin.b]})
-		_collect_lights(c, out)
-
-
-static func _gather_into(node: Node, export_root: Node3D, node_to_key: Dictionary) -> void:
+static func _gather_into(node: Node, export_root: Node3D, node_to_key: Dictionary, out_lights: Array) -> void:
 	for c in node.get_children():
 		if c is MeshInstance3D and (c as MeshInstance3D).is_visible_in_tree() and (c as MeshInstance3D).mesh != null:
 			var mi := c as MeshInstance3D
 			var copy := MeshInstance3D.new()
-			# targets are named by their unique key; occluders by a unique fallback so glTF
-			# never has to rename a collision (which would break the bake-result mapping).
+			# targets keep their unique key; occluders get a unique fallback so glTF never renames
 			copy.name = node_to_key.get(mi, "occ_%d" % mi.get_instance_id())
 			copy.mesh = mi.mesh
 			copy.transform = mi.global_transform
-			# carry each surface's EFFECTIVE material (material_override > surface override >
-			# mesh material) so Blender bakes with the real albedo/emission — that's what makes
-			# indirect bounces colored and lets emissive surfaces cast light.
+			# carry each surface's effective material so Blender bakes the real albedo/emission
 			for s in mi.mesh.get_surface_count():
 				var m := mi.get_active_material(s)
 				if m != null:
@@ -549,11 +492,17 @@ static func _gather_into(node: Node, export_root: Node3D, node_to_key: Dictionar
 			export_root.add_child(copy)
 			copy.owner = export_root
 		elif c is Light3D and (c as Light3D).is_visible_in_tree() and (c as Light3D).light_bake_mode == Light3D.BAKE_STATIC:
-			var lcopy: Light3D = (c as Light3D).duplicate()
-			lcopy.transform = (c as Light3D).global_transform
+			var src := c as Light3D
+			var lcopy: Light3D = src.duplicate()
+			# unique key (not node name, which collides on duplicated lights) so bake.py can match it
+			var key := "lgt_%d" % src.get_instance_id()
+			lcopy.name = key
+			lcopy.transform = src.global_transform
 			export_root.add_child(lcopy)
 			lcopy.owner = export_root
-		_gather_into(c, export_root, node_to_key)
+			var lin := src.light_color.srgb_to_linear()
+			out_lights.append({"name": key, "energy": src.light_energy, "color": [lin.r, lin.g, lin.b]})
+		_gather_into(c, export_root, node_to_key, out_lights)
 
 
 # map LightmapGI BakeQuality (Low/Medium/High/Ultra) to Cycles samples (denoise cleans up)
@@ -566,8 +515,7 @@ static func _samples_for_quality(q: int) -> int:
 
 
 static func _has_uv2(mesh: Mesh) -> bool:
-	# surface_get_arrays() works on every Mesh subclass (ArrayMesh + PrimitiveMesh);
-	# surface_get_format() is ArrayMesh-only, so we check the arrays instead.
+	# check arrays, not surface_get_format() (ArrayMesh-only); surface_get_arrays() works on all
 	if mesh == null:
 		return false
 	for s in mesh.get_surface_count():
@@ -583,8 +531,7 @@ static func _has_uv2(mesh: Mesh) -> bool:
 const ATLAS_GUTTER := 4
 
 
-# World-space surface area of a mesh instance (triangle areas in world space, so a scaled
-# or larger object occupies proportionally more of the atlas).
+# World-space surface area (so larger/scaled objects get proportionally more atlas space).
 static func _world_surface_area(mi: MeshInstance3D) -> float:
 	var mesh := mi.mesh
 	if mesh == null:
@@ -606,14 +553,9 @@ static func _world_surface_area(mi: MeshInstance3D) -> float:
 	return area
 
 
-# Pack the targets into atlas pages at a uniform texel density (no stretching). Each mesh's
-# square chunk side = sqrt(world area) * BASE_DENSITY * texel_scale (px); chunks are
-# shelf-packed, and each page grows to fit its content but never exceeds max_texture_size in
-# either dimension — opening a new page when it would (multi-page like the native lightmapper,
-# where max_texture_size caps each atlas page). A mesh whose chunk can't fit one page is shrunk
-# to fit and its name returned in "fallbacks". Returns { "page_dims": Array[Vector2i] (one per
-# page), "placements": Array ({page:int, rect:Rect2i}, aligned with targets), "fallbacks":
-# Array[String] }.
+# Shelf-pack each mesh's square chunk (side = sqrt(world area) * BASE_DENSITY * texel_scale px)
+# into pages that grow to fit but never exceed max_texture_size, opening new pages as needed.
+# Oversized chunks shrink to fit. Returns { page_dims, placements (aligned with targets), fallbacks }.
 static func _pack_pages(targets: Array[Target], max_texture_size: int, texel_scale: float) -> Dictionary:
 	var cap := maxi(64, max_texture_size)
 	var inner := maxi(1, cap - ATLAS_GUTTER) # leave a gutter so nothing touches the edge
@@ -656,8 +598,7 @@ static func _pack_pages(targets: Array[Target], max_texture_size: int, texel_sca
 		if not placed: # need a new page
 			pages.append({"bottom": cell, "shelves": [{"y": 0, "h": cell, "x": cell}]})
 			placements[idx] = {"page": pages.size() - 1, "rect": _cell_rect(0, 0, s)}
-	# size each page to its content (rounded up to a multiple of 4 for block-compression
-	# safety), never exceeding the cap
+	# size each page to its content, rounded up to a multiple of 4, capped at the max
 	var page_dims: Array = []
 	page_dims.resize(pages.size())
 	for pi in pages.size():
@@ -702,12 +643,9 @@ static func _world_aabb(targets: Array[Target]) -> AABB:
 
 
 
-# Write the page's .import preset, preserving an existing UID line (so re-bakes keep stable
-# UIDs that scenes/.lmbake reference) while still updating the params.
-# compress=false -> mode=0 (lossless): the page keeps its exact content-fit dimensions and
-# respects Max Texture Size. compress=true -> mode=2 (VRAM/BC6H): ~4x smaller VRAM, but the
-# importer rounds the texture up to a power of two (wasted space, and a page may exceed Max
-# Texture Size) and HDR compression can band slightly.
+# Write the page's .import preset, preserving any existing UID line so re-bakes keep stable UIDs.
+# compress=false -> mode 0 (lossless, exact-fit). compress=true -> mode 2 (BC6H, ~4x less VRAM
+# but POT-rounded and can band slightly).
 static func _write_exr_import(exr_res_path: String, compress: bool) -> void:
 	var uid_line := ""
 	if FileAccess.file_exists(exr_res_path + ".import"):

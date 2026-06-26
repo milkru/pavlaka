@@ -1,10 +1,8 @@
 @tool
 extends EditorPlugin
-## pavlaka EditorPlugin. Mirrors the built-in LightmapGI workflow: when a
-## BlenderLightmapGI node is selected, a "Bake Lightmaps" button appears in the 3D
-## editor toolbar and bakes that node's scene using the node's parameters. The Blender
-## executable resolves from the project setting "pavlaka/blender_path" (auto-detected on
-## enable).
+## pavlaka EditorPlugin. When a BlenderLightmapGI node is selected, a "Bake Lightmaps" button
+## appears in the 3D toolbar and bakes its scene. The Blender path comes from the project
+## setting "pavlaka/blender_path" (auto-detected on enable).
 
 const SETTING_BLENDER := "pavlaka/blender_path"
 
@@ -34,8 +32,7 @@ func _enter_tree() -> void:
 	})
 	ProjectSettings.set_as_basic(SETTING_BLENDER, true)
 
-	# auto-detect Blender on first install (when the path is still empty). The user can
-	# always change it in Project Settings (e.g. after updating Blender / with multiple).
+	# auto-detect Blender on first install; the user can change it in Project Settings later
 	if String(ProjectSettings.get_setting(SETTING_BLENDER, "")).is_empty():
 		var found := _detect_blender()
 		if not found.is_empty():
@@ -57,8 +54,7 @@ func _enter_tree() -> void:
 
 	# drive button visibility from the editor selection (reliable across selections)
 	EditorInterface.get_selection().selection_changed.connect(_on_selection_changed)
-	# also re-evaluate the button when project settings change (e.g. the Blender path is
-	# edited/cleared while the node stays selected), so it reflects path validity live
+	# re-evaluate the button when settings change, so it reflects Blender-path validity live
 	if not ProjectSettings.settings_changed.is_connected(_update_button):
 		ProjectSettings.settings_changed.connect(_update_button)
 	_on_selection_changed()
@@ -88,18 +84,15 @@ func _on_selection_changed() -> void:
 			_current = n
 			break
 	_update_button()
-	# BlenderLightmapGI is-a LightmapGI, so Godot's built-in editor plugin also shows its
-	# "Bake Lightmaps" button. Hide it while our node is selected (and re-hide if the
-	# built-in plugin pops it back up — see _on_builtin_vis). Plain LightmapGI nodes are
-	# unaffected (then _current is null and we leave the built-in button alone).
+	# BlenderLightmapGI is-a LightmapGI, so the built-in plugin also shows its bake button. Hide
+	# it while our node is selected (re-hidden on reappear, see _on_builtin_vis); plain ones untouched.
 	var b := _find_builtin_bake_button()
 	if b and _current != null:
 		b.visible = false
 
 
-# single source of truth for the toolbar slot. While baking, the progress strip replaces
-# the button and stays visible regardless of selection. Otherwise the button shows only
-# with a BlenderLightmapGI selected, disabled when the Blender path is unset/invalid.
+# single source of truth for the toolbar slot. Baking: progress strip shown. Otherwise: button
+# shown only with a BlenderLightmapGI selected, disabled when the Blender path is invalid.
 func _update_button() -> void:
 	if _btn == null:
 		return
@@ -120,8 +113,7 @@ func _update_button() -> void:
 # build the inline progress strip ([icon] Baking… Ns [Cancel]); hidden until a bake starts
 func _build_progress_strip() -> void:
 	_progress = HBoxContainer.new()
-	# match the bake button's height exactly (it's theme/DPI dependent, so read it, don't
-	# hardcode); _btn is already created and themed by the time we build the strip
+	# match the bake button's height (theme/DPI dependent, so read it; _btn already exists here)
 	var row_h := _btn.get_combined_minimum_size().y if _btn else 0.0
 	if row_h > 0.0:
 		_progress.custom_minimum_size = Vector2(0, row_h)
@@ -183,10 +175,8 @@ func _find_builtin_bake_button() -> Button:
 	for c in _btn.get_parent().get_children():
 		if c == _btn or not (c is Button):
 			continue
-		# Identify Godot's built-in bake button by its signal wiring, not its label:
-		# LightmapGIEditorPlugin connects the button's "pressed" signal to its own _bake().
-		# Matching the object's class is language-independent (the "Bake Lightmaps" text is
-		# translated in non-English editors).
+		# Identify the built-in bake button by its signal wiring, not its (translated) label:
+		# LightmapGIEditorPlugin connects its "pressed" to its own _bake().
 		for conn in (c as Button).pressed.get_connections():
 			var cb: Callable = conn["callable"]
 			var obj: Object = cb.get_object()
@@ -198,8 +188,7 @@ func _find_builtin_bake_button() -> Button:
 	return null
 
 
-# Format an elapsed duration, promoting to minutes/hours only once it passes each limit:
-# "5 s" -> "2 m 5 s" -> "1 h 2 m 5 s".
+# Format an elapsed duration: "5 s" -> "2 m 5 s" -> "1 h 2 m 5 s".
 func _fmt_elapsed(total_seconds: int) -> String:
 	var s := total_seconds % 60
 	var m := (total_seconds / 60) % 60
@@ -263,8 +252,23 @@ func _scan_windows_blender() -> String:
 		d.list_dir_end()
 	if found.is_empty():
 		return ""
-	found.sort() # lexicographic; last is the newest-versioned folder
-	return found[found.size() - 1]
+	# pick the highest version number, not the lexicographically-last path (so "Blender 4.10"
+	# beats "Blender 4.9", which a plain string sort gets wrong).
+	var best := found[0]
+	for exe in found:
+		if _blender_version_key(exe) > _blender_version_key(best):
+			best = exe
+	return best
+
+
+# Sortable version key from a "...\Blender X.Y\blender.exe" path: X * 1000 + Y, or 0 if the
+# folder doesn't carry a version. Keeps double-digit minor versions ordering correctly.
+func _blender_version_key(exe_path: String) -> int:
+	var folder := exe_path.get_base_dir().get_file() # e.g. "Blender 4.10"
+	var m := RegEx.create_from_string("(\\d+)\\.(\\d+)").search(folder)
+	if m == null:
+		return 0
+	return m.get_string(1).to_int() * 1000 + m.get_string(2).to_int()
 
 
 func _on_bake_pressed() -> void:
@@ -286,9 +290,8 @@ func _on_bake_pressed() -> void:
 		push_error("pavlaka: Blender not found at '%s' — fix Project Settings → pavlaka/blender_path" % blender)
 		return
 
-	# Resolve where to save the .lmbake, like native LightmapGI: reuse the existing path if
-	# this node was already baked; otherwise prompt with a file dialog defaulting to next to
-	# the scene. An unsaved scene has no default location, so it must be prompted.
+	# Resolve where to save the .lmbake: reuse the existing path if already baked, else prompt
+	# (defaulting next to the scene; an unsaved scene has no default and is always prompted).
 	var save_path := ""
 	var data: LightmapGIData = _current.light_data
 	if data != null and data.resource_path.begins_with("res://"):
@@ -299,9 +302,7 @@ func _on_bake_pressed() -> void:
 		if save_path.is_empty():
 			return # cancelled
 
-	# Show the inline progress strip in the toolbar (in place of the bake button). It stays
-	# visible regardless of selection while baking; the editor remains fully usable since the
-	# bake runs non-blocking.
+	# show the progress strip in place of the bake button; it stays up across selection changes
 	_baking = true
 	_cancelled = [false]
 	_bake_start_ms = Time.get_ticks_msec()
@@ -313,12 +314,9 @@ func _on_bake_pressed() -> void:
 	if _progress_timer:
 		_progress_timer.start()
 
-	# Capture the node in a local: _current follows the editor selection, which can change (or
-	# clear) while the async bake runs if the user clicks elsewhere. Use `node` throughout so a
-	# mid-bake selection change can't null it out from under us.
+	# capture the node locally: _current follows the selection, which can change mid-bake
 	var node := _current
-	# remember the node's prior light_data path so we can tell if the bake actually changes
-	# the scene (first bake / different save path) and only then mark it unsaved
+	# remember the prior light_data path, to mark the scene unsaved only if the bake changes it
 	var prev_data: LightmapGIData = node.light_data
 	var prev_path := prev_data.resource_path if prev_data != null else ""
 
@@ -329,16 +327,14 @@ func _on_bake_pressed() -> void:
 	_baking = false
 	_update_button()
 
-	# Mark the scene unsaved only when the assignment changed the scene (the node now points
-	# at a different .lmbake), so a first bake isn't lost on reload. A re-bake reusing the
-	# same path leaves the .tscn unchanged, so it stays clean (no spurious '*').
+	# mark unsaved only if the node now points at a different .lmbake, so a first bake isn't lost
+	# on reload while a re-bake to the same path leaves the .tscn clean.
 	if err == OK and is_instance_valid(node) and node.light_data != null \
 			and node.light_data.resource_path != prev_path:
 		EditorInterface.mark_scene_as_unsaved()
 
 
-# Default .lmbake path: next to the scene, named after it (matches native LightmapGI).
-# Returns "" if the scene isn't saved (no stable location to default to).
+# Default .lmbake path: next to the scene, named after it. "" if the scene isn't saved.
 func _default_lmbake_path(root: Node) -> String:
 	var scene := root.scene_file_path
 	if scene.is_empty():
@@ -346,8 +342,7 @@ func _default_lmbake_path(root: Node) -> String:
 	return scene.get_basename() + ".lmbake"
 
 
-# Pop an EditorFileDialog to choose the .lmbake save path (location + name). Returns the
-# chosen res:// path, or "" if cancelled. Awaits the dialog.
+# Pop an EditorFileDialog to choose the .lmbake save path. Returns the res:// path, or "" if cancelled.
 func _prompt_save_path(default_path: String) -> String:
 	var dlg := EditorFileDialog.new()
 	dlg.file_mode = EditorFileDialog.FILE_MODE_SAVE_FILE
@@ -356,8 +351,7 @@ func _prompt_save_path(default_path: String) -> String:
 	dlg.add_filter("*.lmbake", "Lightmap Bake")
 	if not default_path.is_empty():
 		dlg.current_path = default_path
-	# Drive completion from both signals rather than visibility_changed: EditorFileDialog may
-	# hide before emitting file_selected, so awaiting visibility alone can resume with no path.
+	# complete via both signals, not visibility_changed (the dialog may hide before file_selected)
 	var result := {"path": "", "done": false}
 	dlg.file_selected.connect(func(p: String): result.path = p; result.done = true)
 	dlg.canceled.connect(func(): result.done = true)

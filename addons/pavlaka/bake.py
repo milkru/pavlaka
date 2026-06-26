@@ -1,18 +1,18 @@
 """Bake a Godot-exported scene's lightmaps (multi-mesh).
 
-Imports a glb from Godot, finds every lightmap target (mesh with >=2 UV layers = it
-carries a Godot UV2), and bakes IRRADIANCE (Diffuse, Direct+Indirect, Color OFF) into
-each target's UV2. Each mesh -> its own denoised linear EXR named after the node, sized
-to the per-mesh chunk size Godot computed from world-space surface area (params "sizes").
-Godot then composites these into one packed lightmap atlas.
-
-Real materials are preserved (the bake-target image node is injected into each mesh's own
-material rather than replacing it), so indirect bounces are colored by surface albedo and
-emissive materials cast light.
-
   blender --background --python bake.py -- <glb> <out_dir> <params.json>
 
-The plugin runs this non-blocking and can't read stdout, so everything is mirrored to
+Imports the glb, finds every lightmap target (mesh with >=2 UV layers, i.e. it carries a
+Godot UV2), and bakes irradiance (Diffuse, Direct+Indirect, Color OFF) into each target's
+UV2. Each mesh becomes its own denoised linear EXR, sized to the per-mesh chunk size Godot
+computed from world-space surface area (params "sizes"). Godot composites those into one
+packed atlas.
+
+Real materials are kept (the bake-target image node is injected into each mesh's own
+material rather than replacing it), so indirect bounces pick up surface albedo and emissive
+materials cast light.
+
+The plugin runs this non-blocking and can't read stdout, so output is mirrored to
 <out_dir>/bake.log and the whole run is wrapped so a fatal error still writes baked.json.
 """
 import bpy
@@ -31,7 +31,7 @@ os.makedirs(out_dir, exist_ok=True)
 # bake parameters come from a JSON file written by the plugin
 with open(rest[2], "r") as _pf:
     PARAMS = json.load(_pf)
-# per-mesh chunk size (px), keyed by node name; Godot computed these from world area
+# per-mesh chunk size (px), keyed by export key; Godot computed these from world area
 SIZES = PARAMS.get("sizes", {})
 DEFAULT_SIZE = 512
 SAMPLES = int(PARAMS.get("samples", 256))
@@ -99,11 +99,8 @@ def denoise_over(image, out_path, size):
 
 
 def setup_bake_target(me, img, obj_name):
-    """Make this mesh ready to bake into `img` WITHOUT discarding its real materials, so the
-    surface's actual albedo/emission still drive colored indirect bounces. Each material slot
-    gets its own copy (so shared material datablocks aren't disturbed) with the bake-target
-    image node injected and made active; multi-material meshes inject into every slot pointing
-    at the same image. Meshes with no material get a plain default."""
+    """Bake into `img` without discarding real materials (so albedo/emission still drive bounces).
+    Each slot gets its own material copy with the bake-target image injected and made active."""
     if not me.materials:
         m = bpy.data.materials.new("BakeMat_%s" % obj_name)
         m.use_nodes = True
@@ -145,9 +142,9 @@ def bake_one(scene, obj, slice_path, size):
 
     img.filepath_raw = slice_path
     img.file_format = 'OPEN_EXR'
-    img.save()
-    if DENOISE:
-        denoise_over(img, slice_path, size)
+    img.save()  # raw bake, kept if denoise can't produce output below
+    if DENOISE and not denoise_over(img, slice_path, size):
+        out("PAVLAKA_BAKE: WARNING: denoise produced no output for %s; using raw bake" % obj.name)
 
 
 def setup_device(scene):
@@ -158,10 +155,8 @@ def setup_device(scene):
     try:
         prefs = bpy.context.preferences.addons['cycles'].preferences
         prefs.get_devices()
-        # Prefer CUDA over OptiX on NVIDIA: OptiX uses the GPU's hardware RT cores, whose
-        # intersection precision / self-intersection epsilon differs from the CPU and leaks
-        # light through thin walls, corners and coincident faces. CUDA uses the same software
-        # BVH path as the CPU, so the bake matches CPU results closely (a bit slower than OptiX).
+        # Prefer CUDA over OptiX on NVIDIA: OptiX's hardware RT cores have a different
+        # self-intersection epsilon that leaks light through thin walls; CUDA matches the CPU.
         for backend in ('CUDA', 'OPTIX', 'HIP', 'METAL', 'ONEAPI'):
             try:
                 prefs.compute_device_type = backend
@@ -205,8 +200,7 @@ def main():
         env_tex.image = bpy.data.images.load(sky)
         wnt.links.new(env_tex.outputs["Color"], bg.inputs[0])
         bg.inputs[1].default_value = 1.0
-        # apply the sky rotation (Godot bakes the panorama unrotated): rotate the env texture's
-        # sampling direction via Texture Coordinate (Generated) -> Mapping -> Environment Texture.
+        # apply sky rotation (panorama is baked unrotated) via TexCoord -> Mapping -> env texture
         sky_rot = PARAMS.get("sky_rotation", [0.0, 0.0, 0.0])
         if any(sky_rot):
             tcoord = wnt.nodes.new("ShaderNodeTexCoord")
@@ -215,20 +209,13 @@ def main():
             wnt.links.new(tcoord.outputs["Generated"], mapping.inputs["Vector"])
             wnt.links.new(mapping.outputs["Vector"], env_tex.inputs["Vector"])
     else:
-        # flat ambient dome (a new world's Background color defaults to near-black, so
-        # set a real color and let AMBIENT control dome brightness)
+        # flat ambient dome: set a real color (new-world default is near-black), AMBIENT = brightness
         bg.inputs[0].default_value = (AMBIENT_RGB[0], AMBIENT_RGB[1], AMBIENT_RGB[2], 1.0)
         bg.inputs[1].default_value = AMBIENT
 
-    # override imported lights with the Godot light's actual energy and color. Energy is
-    # multiplied by pi: Godot normalizes every analytic light by pi internally
-    # (light_storage.cpp does `energy *= PI`) and the diffuse BRDF divides by pi, so a
-    # lightmap texel must hold `energy * NdotL`; Cycles' Color-OFF diffuse bake outputs
-    # irradiance/pi, so the light's strength must be `energy * pi` to match. This is the
-    # same energy-intent conversion for all light types. It's exact for directional (clean
-    # irradiance unit, no falloff); point/spot carry the same converted energy but render
-    # with Cycles' physical inverse-square falloff (vs Godot's range-based), which is the
-    # expected lighting-model difference, not something we correct for.
+    # Override imported lights with Godot's energy/color, scaling energy by pi: Godot normalizes
+    # analytic lights by pi (light_storage.cpp `energy *= PI`) while Cycles' Color-OFF bake outputs
+    # irradiance/pi, so `energy * pi` matches. Point/spot still use Cycles' inverse-square falloff.
     for obj in bpy.data.objects:
         if obj.type == 'LIGHT' and obj.name in LIGHTS:
             info = LIGHTS[obj.name]
@@ -253,8 +240,7 @@ def main():
     errors = []
     used_names = set()
     for slice_index, obj in enumerate(targets):
-        # name the slice after the node; de-dup (Godot allows same names under different
-        # parents) by appending an index so files never collide
+        # name the slice after the node, appending an index to de-dup colliding names
         base = re.sub(r'[^A-Za-z0-9_-]', '_', obj.name) or "mesh"
         fname = base
         n = 1
@@ -267,8 +253,7 @@ def main():
         try:
             bake_one(scene, obj, os.path.join(out_dir, slice_file), size)
             meshes_meta.append({"name": obj.name, "file": slice_file})
-            # drop a marker so Godot can stream this mesh into the live preview before the
-            # whole bake finishes (the .exr is fully written + denoised at this point).
+            # drop a marker so Godot can stream this mesh into the live preview now
             with open(os.path.join(out_dir, fname + ".done"), "w") as _mf:
                 json.dump({"name": obj.name, "file": slice_file}, _mf)
         except Exception as e:
