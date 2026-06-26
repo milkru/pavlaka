@@ -253,9 +253,12 @@ def main():
         try:
             bake_one(scene, obj, os.path.join(out_dir, slice_file), size)
             meshes_meta.append({"name": obj.name, "file": slice_file})
-            # drop a marker so Godot can stream this mesh into the live preview now
-            with open(os.path.join(out_dir, fname + ".done"), "w") as _mf:
+            # drop a marker so Godot can stream this mesh into the live preview now. Write to a
+            # temp file then rename so Godot's poll never reads a half-written .done.
+            done_path = os.path.join(out_dir, fname + ".done")
+            with open(done_path + ".tmp", "w") as _mf:
                 json.dump({"name": obj.name, "file": slice_file}, _mf)
+            os.replace(done_path + ".tmp", done_path)
         except Exception as e:
             errors.append("%s: %s" % (obj.name, e))
             out("PAVLAKA_BAKE: ERROR baking %s:\n%s" % (obj.name, traceback.format_exc()))

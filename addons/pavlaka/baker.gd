@@ -97,7 +97,7 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 		err = doc.write_to_filesystem(state, glb_abs)
 	export_root.free()
 	if err != OK:
-		push_error("pavlaka: glTF export failed (%d)" % err)
+		push_error("pavlaka: glTF export failed: %s (err %d)" % [error_string(err), err])
 		return err
 
 	# 4. run Blender headless. Intermediates go to the temp work dir; final pages + .lmbake go
@@ -182,7 +182,10 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 			% ("; ".join(PackedStringArray(bake_errors)) if not bake_errors.is_empty() else "none reported"))
 		return FAILED
 	if not bake_errors.is_empty():
-		push_warning("pavlaka: Blender reported %d bake error(s); see bake.log in %s" % [bake_errors.size(), work_abs])
+		push_warning("pavlaka: Blender reported %d bake error(s):" % bake_errors.size())
+		for e in bake_errors:
+			push_warning("pavlaka:   %s" % e)
+		_dump_blender_log(work_abs) # full Blender output (version, device, tracebacks) for bug reports
 
 	# 6. blit any meshes not already streamed in during the bake (last marker can land at exit)
 	for m in baked_meshes:
@@ -242,7 +245,7 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 	var lmbake := save_path
 	err = ResourceSaver.save(data, lmbake)
 	if err != OK:
-		push_error("pavlaka: saving .lmbake failed (%d)" % err)
+		push_error("pavlaka: saving .lmbake failed: %s (err %d): %s" % [error_string(err), err, lmbake])
 		return err
 	# link the resource to its file so the scene references .lmbake externally, not inline
 	data.take_over_path(lmbake)
