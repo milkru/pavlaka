@@ -29,6 +29,11 @@ extends LightmapGI
 ## Pixels the baked result is dilated past each UV island edge. Higher reduces dark seams and
 ## bleeding between charts at the cost of some atlas space; too low can show black edges.
 @export_range(0, 64) var bake_margin: int = 16
+## Clamp the brightness of individual indirect light samples to kill fireflies (bright speckle
+## noise from small/intense lights or near-caustic paths) that the denoiser can't fully
+## remove. 0 = off (no clamping). A small value like 10 cleans up noisy interior bakes at a
+## tiny cost in indirect brightness.
+@export_range(0.0, 50.0, 0.1, "or_greater") var indirect_clamp: float = 0.0
 ## Compress the baked lightmap textures to save GPU memory.
 ##
 ## Off (default): lossless. Each atlas page keeps its exact content fit size and never
@@ -56,6 +61,7 @@ func get_bake_opts() -> Dictionary:
 		"use_gpu": use_gpu,
 		"bounces": bounces, # inherited LightmapGI property; Cycles diffuse bounces
 		"bake_margin": bake_margin,
+		"indirect_clamp": indirect_clamp,
 		"denoise": use_denoiser, # inherited LightmapGI property
 		"light_energy_scale": light_energy_scale,
 		# these are LightmapGI's own inherited Environment properties

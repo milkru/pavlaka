@@ -51,6 +51,7 @@ the scene); subsequent bakes reuse that path silently, like the native lightmapp
 | Environment | `Custom Sky` / `Custom Color` / `Custom Energy` | Used by the Custom Sky and Custom Color modes (energy scales either). |
 | Blender Bake | `use_gpu` | Render the bake on the GPU if a compute device is available (much faster), else fall back to CPU. **On by default.** Turn off if GPU baking is unstable on your machine or you want the most CPU-consistent result. |
 | Blender Bake | `bake_margin` | Pixels the baked result is dilated past each UV island edge. Higher reduces dark seams / bleeding between charts; too low can show black edges. |
+| Blender Bake | `indirect_clamp` | Clamp the brightness of individual indirect light samples to kill fireflies (bright speckle noise the denoiser can't fully remove). `0` = off. A small value like `10` cleans up noisy interior bakes at a tiny cost in indirect brightness. |
 | Blender Bake | `compress_lightmaps` | Compress the baked lightmap textures (VRAM compression, ~4× smaller GPU memory). **Off** (default): lossless, pages kept at their exact content-fit size. **On**: ~4× smaller VRAM, but textures are rounded up to a power of two (some wasted space, a page may exceed Max Texture Size) and BC6H can band slightly on HDR. |
 | Lights | `light_energy_scale` | Multiplier on each **Static** light's own energy and color during the bake (only `Bake Mode = Static` lights contribute). Tune if baked brightness doesn't match the in-editor lighting. |
 

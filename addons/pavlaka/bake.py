@@ -33,6 +33,7 @@ DEFAULT_SIZE = 512
 SAMPLES = int(PARAMS.get("samples", 256))
 USE_GPU = bool(PARAMS.get("use_gpu", False))
 MARGIN = int(PARAMS.get("bake_margin", 16))
+INDIRECT_CLAMP = float(PARAMS.get("indirect_clamp", 0.0))
 DENOISE = bool(PARAMS.get("denoise", True))
 BOUNCES = int(PARAMS.get("bounces", 3))
 AMBIENT = float(PARAMS.get("ambient_energy", 0.2))
@@ -169,6 +170,7 @@ def main():
     setup_device(scene)
     scene.cycles.samples = SAMPLES
     scene.cycles.diffuse_bounces = BOUNCES # indirect GI bounce count for the irradiance bake
+    scene.cycles.sample_clamp_indirect = INDIRECT_CLAMP # 0 = off; clamps fireflies
     scene.world = bpy.data.worlds.new("World")
     scene.world.use_nodes = True
     wnt = scene.world.node_tree
