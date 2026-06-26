@@ -9,6 +9,8 @@ just have not been tested. The engine internals it leans on are version specific
 compatibility is not a goal. The Blender side uses the long stable bake API and works on
 **Blender 4.x** (built against 4.1.1).
 
+![Example](https://github.com/milkru/data_resources/blob/main/pavlaka.png "Example")
+
 ## Why use this over the native LightmapGI?
 
 - **Better looking bakes.** Cycles is a production path tracer, so the bounce light, soft
