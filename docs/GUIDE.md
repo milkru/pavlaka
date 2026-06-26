@@ -68,13 +68,3 @@ func _run() -> void:
 `PavlakaBaker.bake(root, lm, blender_path, save_path, opts := {}, cancelled := [])` returns `OK`
 or an error code. To cancel, pass a one element array and set `cancelled[0] = true` from
 elsewhere.
-
-## Things to watch out for
-
-- **Point and spot lights may not match Godot's brightness.** Directional lights match
-  automatically. Point and spot lights use Cycles' physical falloff, which differs from Godot's,
-  so they can come out brighter or dimmer. Adjust that light's energy in Godot until it looks
-  right.
-- **A very large mesh is scaled down, not split.** If a mesh is too big to fit `Max Texture
-  Size`, its lightmap is scaled down to fit (so it bakes at lower detail) and you get a warning
-  naming it. For full detail, split the mesh or raise `Max Texture Size`.
