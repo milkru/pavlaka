@@ -8,6 +8,22 @@ Targets **Godot 4.7**. Engine internals are version specific, so long term compa
 is not a goal. The Blender side uses the long stable bake API and works on **Blender 4.x**
 (developed against 4.1.1).
 
+## Why use this over the built-in LightmapGI?
+
+- **It can't crash the editor.** The bake runs in a separate Blender process, so a failed or
+  misbehaving bake can't take Godot down with it (the built-in lightmapper sometimes does).
+- **Fewer light leaks.** Cycles' path-traced bake leaks noticeably less light through walls,
+  corners and thin geometry than the built-in lightmapper in the scenes tested.
+- **Non-blocking.** Baking happens in the background and the editor stays fully usable while
+  it runs. The built-in bake blocks the editor behind a modal progress dialog.
+- **It never hard-fails on a too-big mesh.** A mesh whose lightmap can't fit one page is
+  shrunk to fit (with a warning) instead of aborting the whole bake, which the built-in
+  lightmapper does.
+- **Optional GPU baking.** Bake on the GPU for a big speed-up, or on the CPU for the most
+  consistent results. (See the note below: the built-in lightmapper is GPU-only.)
+- **Scriptable.** A bake can be triggered from any editor tool script via
+  `PavlakaBaker.bake(...)`, so you can batch-bake scenes or automate it.
+
 ## How it works
 
 ```
