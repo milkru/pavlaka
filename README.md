@@ -52,6 +52,4 @@ limitations.
 
 ## Documentation
 
-- **[Guide](docs/GUIDE.md)** — usage, node parameters, scripting, and limitations.
-- **[RESEARCH.md](RESEARCH.md)** — design, Godot 4.7 source findings, the data contract, and
-  the pitfalls discovered while building this.
+See the **[Guide](docs/GUIDE.md)** for usage, node parameters, scripting, and limitations.
