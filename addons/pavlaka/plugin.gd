@@ -133,7 +133,6 @@ func _build_progress_strip() -> void:
 	_progress.add_child(_progress_label)
 	_cancel_btn = Button.new()
 	_cancel_btn.text = "Cancel"
-	_cancel_btn.set_theme_type_variation("FlatButton") # match the toolbar's flat buttons
 	_cancel_btn.pressed.connect(_on_cancel_pressed)
 	_progress.add_child(_cancel_btn)
 	_progress.hide()
