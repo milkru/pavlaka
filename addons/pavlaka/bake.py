@@ -44,6 +44,10 @@ AMBIENT = float(PARAMS.get("ambient_energy", 0.2))
 AMBIENT_RGB = PARAMS.get("ambient_color", [1.0, 1.0, 1.0])
 # name -> {"energy", "color":[r,g,b] linear}; used to override imported lights
 LIGHTS = {l["name"]: l for l in PARAMS.get("lights", [])}
+# object key -> {surface index -> emissive entry}; rebuilt because the glb drops emission textures
+EMISSIVE = {}
+for _em in PARAMS.get("emissive", []):
+    EMISSIVE.setdefault(_em["object"], {})[int(_em["surface"])] = _em
 
 _log = open(os.path.join(out_dir, "bake.log"), "w", encoding="utf-8")
 
@@ -67,17 +71,35 @@ def write_meta(meshes_meta, errors):
         json.dump(meta, f, indent=2)
 
 
+def build_denoise_tree(image):
+    """Wire image -> OIDN denoise -> output in the scene compositor, replacing any prior graph.
+    Blender 5.0 moved the compositor onto a node-group datablock (scene.compositing_node_group)
+    and swapped the Composite output node for a Group Output, so branch on the version."""
+    sc = bpy.context.scene
+    if bpy.app.version[0] >= 5:
+        tree = sc.compositing_node_group
+        if tree is None:
+            tree = bpy.data.node_groups.new("PavlakaDenoise", "CompositorNodeTree")
+            tree.interface.new_socket(name="Image", in_out="OUTPUT", socket_type="NodeSocketColor")
+            sc.compositing_node_group = tree
+        tree.nodes.clear()
+        n_out = tree.nodes.new("NodeGroupOutput")
+    else:
+        sc.use_nodes = True
+        tree = sc.node_tree
+        tree.nodes.clear()
+        n_out = tree.nodes.new("CompositorNodeComposite")
+    n_img = tree.nodes.new("CompositorNodeImage"); n_img.image = image
+    n_dn = tree.nodes.new("CompositorNodeDenoise")
+    tree.links.new(n_img.outputs["Image"], n_dn.inputs["Image"])
+    tree.links.new(n_dn.outputs["Image"], n_out.inputs["Image"])
+
+
 def denoise_over(image, out_path, size):
     """Compositor OIDN denoise -> linear EXR at out_path (overwrites)."""
     sc = bpy.context.scene
-    sc.use_nodes = True
-    nt = sc.node_tree
-    nt.nodes.clear()
-    n_img = nt.nodes.new("CompositorNodeImage"); n_img.image = image
-    n_dn = nt.nodes.new("CompositorNodeDenoise")
-    n_out = nt.nodes.new("CompositorNodeComposite")
-    nt.links.new(n_img.outputs["Image"], n_dn.inputs["Image"])
-    nt.links.new(n_dn.outputs["Image"], n_out.inputs["Image"])
+    build_denoise_tree(image)
+    sc.render.use_compositing = True
     sc.render.resolution_x = size
     sc.render.resolution_y = size
     sc.render.resolution_percentage = 100
@@ -178,6 +200,60 @@ def setup_device(scene):
     scene.cycles.device = 'CPU'
 
 
+def apply_emission(obj):
+    """Rebuild emission from Godot's material on each slot listed in EMISSIVE, since the glb
+    round-trip keeps the emission color but drops the emission texture. Overrides the Principled
+    BSDF's emission inputs (clearing any from the import) with color * energy and, if present, the
+    saved texture sampled through the model's base UV."""
+    slots = EMISSIVE.get(obj.name)
+    if not slots:
+        return
+    me = obj.data
+    uv0 = me.uv_layers[0].name if me.uv_layers else ""
+    for i in range(len(me.materials)):
+        em = slots.get(i)
+        mat = me.materials[i]
+        if em is None or mat is None or not mat.use_nodes:
+            continue
+        nt = mat.node_tree
+        bsdf = next((n for n in nt.nodes if n.type == 'BSDF_PRINCIPLED'), None)
+        if bsdf is None:
+            continue
+        ec = bsdf.inputs.get("Emission Color") or bsdf.inputs.get("Emission")
+        es = bsdf.inputs.get("Emission Strength")
+        if ec is None or es is None:
+            continue
+        for inp in (ec, es):
+            for link in list(inp.links):
+                nt.links.remove(link)
+        es.default_value = float(em.get("energy", 1.0))
+        color = em.get("color", [0.0, 0.0, 0.0])
+        tex_file = em.get("texture", "")
+        if not tex_file:
+            ec.default_value = (color[0], color[1], color[2], 1.0)
+            continue
+        tex = nt.nodes.new("ShaderNodeTexImage")
+        tex.image = bpy.data.images.load(os.path.join(out_dir, tex_file))
+        tex.image.colorspace_settings.name = 'sRGB'
+        if uv0:
+            uvn = nt.nodes.new("ShaderNodeUVMap")
+            uvn.uv_map = uv0
+            nt.links.new(uvn.outputs["UV"], tex.inputs["Vector"])
+        op = em.get("op", "add")
+        # default Godot emission (black + ADD, or white + MULTIPLY) is just the texture; otherwise
+        # combine texture with the constant color the same way Godot's emission operator does.
+        identity = (op == "add" and color == [0.0, 0.0, 0.0]) or \
+                   (op == "multiply" and color == [1.0, 1.0, 1.0])
+        if identity:
+            nt.links.new(tex.outputs["Color"], ec)
+        else:
+            vm = nt.nodes.new("ShaderNodeVectorMath")
+            vm.operation = 'MULTIPLY' if op == "multiply" else 'ADD'
+            vm.inputs[1].default_value = (color[0], color[1], color[2])
+            nt.links.new(tex.outputs["Color"], vm.inputs[0])
+            nt.links.new(vm.outputs["Vector"], ec)
+
+
 def main():
     out("PAVLAKA_BAKE: Blender %s, glb=%s" % (".".join(map(str, bpy.app.version)), glb))
     bpy.ops.wm.read_factory_settings(use_empty=True)
@@ -222,6 +298,10 @@ def main():
             obj.data.energy = float(info["energy"]) * 3.141592653589793
             col = info["color"]
             obj.data.color = (col[0], col[1], col[2])
+
+    for obj in bpy.data.objects:
+        if obj.type == 'MESH':
+            apply_emission(obj)
 
     bake = scene.render.bake
     bake.use_pass_direct = True

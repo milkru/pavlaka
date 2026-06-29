@@ -87,7 +87,9 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 	var work_abs := ProjectSettings.globalize_path(work)
 	var glb_abs := work_abs.path_join("scene.glb")
 	var lights: Array = [] # filled with each exported light's {name, energy, color}
-	var export_root := _build_export_scene(root, targets, lights)
+	# emissive surfaces, rebuilt in Blender because the glb round-trip drops emission textures
+	var emissive: Array = []
+	var export_root := _build_export_scene(root, targets, work_abs, lights, emissive)
 	if lights.is_empty():
 		print("pavlaka: no Static lights found — baking ambient only. Set a light's Bake Mode to Static to include it in the bake.")
 	var doc := GLTFDocument.new()
@@ -117,6 +119,7 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 		"indirect_clamp": cfg["indirect_clamp"],
 		"denoise": cfg["denoise"],
 		"lights": lights,
+		"emissive": emissive,
 		"sky_panorama": env["sky_panorama"],
 		"sky_rotation": env.get("sky_rotation", [0.0, 0.0, 0.0]),
 		"ambient_color": env["ambient_color"],
@@ -399,14 +402,15 @@ static func _collect(node: Node, lm: LightmapGI, out: Array[Target]) -> void:
 
 # Build a flat world-space export scene of visible meshes + static lights. Each mesh copy is
 # named by a unique key so results map back despite name collisions; bake.py bakes the ones
-# with a UV2. `out_lights` gets each light's {name (key), energy, color} for bake.py to match.
-static func _build_export_scene(root: Node, targets: Array[Target], out_lights: Array) -> Node3D:
+# with a UV2. `out_lights` gets each light's {name (key), energy, color}; `out_emissive` gets each
+# emissive surface's {object, surface, color, energy, op, texture} (texture saved into work_abs).
+static func _build_export_scene(root: Node, targets: Array[Target], work_abs: String, out_lights: Array, out_emissive: Array) -> Node3D:
 	var node_to_key := {}
 	for t in targets:
 		node_to_key[t.node] = t.key
 	var export_root := Node3D.new()
 	export_root.name = root.name
-	_gather_into(root, export_root, node_to_key, out_lights)
+	_gather_into(root, export_root, node_to_key, work_abs, out_lights, out_emissive)
 	return export_root
 
 
@@ -478,7 +482,7 @@ static func _find_environment(node: Node) -> Environment:
 	return null
 
 
-static func _gather_into(node: Node, export_root: Node3D, node_to_key: Dictionary, out_lights: Array) -> void:
+static func _gather_into(node: Node, export_root: Node3D, node_to_key: Dictionary, work_abs: String, out_lights: Array, out_emissive: Array) -> void:
 	for c in node.get_children():
 		if c is MeshInstance3D and (c as MeshInstance3D).is_visible_in_tree() and (c as MeshInstance3D).mesh != null:
 			var mi := c as MeshInstance3D
@@ -492,6 +496,7 @@ static func _gather_into(node: Node, export_root: Node3D, node_to_key: Dictionar
 				var m := mi.get_active_material(s)
 				if m != null:
 					copy.set_surface_override_material(s, m)
+					_collect_emission(m, copy.name, s, work_abs, out_emissive)
 			export_root.add_child(copy)
 			copy.owner = export_root
 		elif c is Light3D and (c as Light3D).is_visible_in_tree() and (c as Light3D).light_bake_mode == Light3D.BAKE_STATIC:
@@ -505,7 +510,39 @@ static func _gather_into(node: Node, export_root: Node3D, node_to_key: Dictionar
 			lcopy.owner = export_root
 			var lin := src.light_color.srgb_to_linear()
 			out_lights.append({"name": key, "energy": src.light_energy, "color": [lin.r, lin.g, lin.b]})
-		_gather_into(c, export_root, node_to_key, out_lights)
+		_gather_into(c, export_root, node_to_key, work_abs, out_lights, out_emissive)
+
+
+# Record an emissive surface so bake.py can rebuild it in Blender. The glb round-trip keeps the
+# emission color but drops the emission texture, so we save the texture ourselves and pass the
+# color/energy/operator. Skips non-BaseMaterial3D (e.g. ShaderMaterial) and surfaces that emit
+# nothing. Godot emission color is sRGB -> converted to linear for Cycles.
+static func _collect_emission(mat: Material, obj_key: String, surface: int, work_abs: String, out: Array) -> void:
+	var bm := mat as BaseMaterial3D
+	if bm == null or not bm.emission_enabled:
+		return
+	var col := bm.emission.srgb_to_linear()
+	var tex_name := ""
+	var tex := bm.emission_texture
+	if tex != null:
+		var img := tex.get_image()
+		if img != null:
+			if img.is_compressed():
+				img.decompress()
+			img.convert(Image.FORMAT_RGBA8)
+			tex_name = "emis_%s_%d.png" % [obj_key, surface]
+			if img.save_png(work_abs.path_join(tex_name)) != OK:
+				push_warning("pavlaka: couldn't save emission texture for '%s'; using emission color only" % obj_key)
+				tex_name = ""
+	if tex_name == "" and col.r == 0.0 and col.g == 0.0 and col.b == 0.0:
+		return # emits nothing
+	out.append({
+		"object": obj_key, "surface": surface,
+		"color": [col.r, col.g, col.b],
+		"energy": bm.emission_energy_multiplier,
+		"op": "add" if bm.emission_operator == BaseMaterial3D.EMISSION_OP_ADD else "multiply",
+		"texture": tex_name,
+	})
 
 
 # map LightmapGI BakeQuality (Low/Medium/High/Ultra) to Cycles samples (denoise cleans up)

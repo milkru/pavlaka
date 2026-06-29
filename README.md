@@ -7,7 +7,7 @@ Bake Godot lightmaps in **Blender (Cycles)** and bring them back as native
 Tested on **Godot 4.5 to 4.7** (built on 4.7). Other Godot 4.x versions probably work too, they
 just have not been tested. The engine internals it leans on are version specific, so long term
 compatibility is not a goal. The Blender side uses the long stable bake API and works on
-**Blender 4.x** (built against 4.1.1).
+**Blender 4.x and 5.x** (tested on 4.1.1 and 5.1.2).
 
 ![Example](https://github.com/milkru/data_resources/blob/main/pavlaka.png "Example")
 
@@ -38,7 +38,7 @@ compatibility is not a goal. The Blender side uses the long stable bake API and 
 ## Requirements
 
 - **Godot 4.x** (tested on 4.5 to 4.7)
-- **Blender 4.x** (tested 4.1.1), available as an executable on disk
+- **Blender 4.x or 5.x** (tested 4.1.1 and 5.1.2), available as an executable on disk
 - Static meshes with a **UV2** (lightmap) channel
 
 ## Install
