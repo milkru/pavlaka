@@ -8,30 +8,30 @@ It is a Godot editor plugin that adds a `BlenderLightmapGI` node with a **Bake L
 
 ## Why use this over native LightmapGI?
 
-* **Better looking bakes**
-  Cycles is a production path tracer, so bounce light, soft shadows, and ambient occlusion usually look more natural.
+* **Better looking bakes:**
+  Cycles is a production path tracer, so bounce light, soft shadows and ambient occlusion usually look more natural.
 
-* **Fewer light leaks**
-  In tested scenes, Cycles leaks less light through walls, corners, and thin geometry than the native lightmapper.
+* **Fewer light leaks:**
+  In tested scenes, Cycles leaks less light through walls, corners and thin geometry than the native lightmapper.
 
-* **Safer baking**
+* **Safer baking:**
   The bake runs in a separate Blender process. If something fails, it should not crash the Godot editor.
 
-* **Background baking**
+* **Background baking:**
   The editor stays usable while Blender bakes the lightmaps.
 
-* **Live preview**
+* **Live preview:**
   Meshes update in the viewport as they finish baking, so you can watch the scene come together.
 
-* **Scriptable**
+* **Scriptable:**
   Bakes can be started from editor scripts with `PavlakaBaker.bake(...)`, which makes batch baking and automation easier.
 
 ## Requirements
 
-* **Godot 4.x**
+* **Godot 4.x:**
   Tested with Godot 4.5 to 4.7, built on 4.7. Other Godot 4.x versions may work, but they have not been tested.
 
-* **Blender 4.x or 5.x**
+* **Blender 4.x or 5.x:**
   Tested with Blender 4.1.1 and 5.1.2. Blender needs to be available as an executable on disk.
 
 * Static meshes with a **UV2** lightmap channel.
