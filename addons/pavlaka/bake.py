@@ -33,7 +33,7 @@ with open(rest[2], "r") as _pf:
     PARAMS = json.load(_pf)
 # per-mesh chunk size (px), keyed by export key; Godot computed these from world area
 SIZES = PARAMS.get("sizes", {})
-DEFAULT_SIZE = 512
+DEFAULT_SIZE = [512, 512]
 SAMPLES = int(PARAMS.get("samples", 256))
 USE_GPU = bool(PARAMS.get("use_gpu", False))
 MARGIN = int(PARAMS.get("bake_margin", 16))
@@ -95,13 +95,13 @@ def build_denoise_tree(image):
     tree.links.new(n_dn.outputs["Image"], n_out.inputs["Image"])
 
 
-def denoise_over(image, out_path, size):
+def denoise_over(image, out_path, width, height):
     """Compositor OIDN denoise -> linear EXR at out_path (overwrites)."""
     sc = bpy.context.scene
     build_denoise_tree(image)
     sc.render.use_compositing = True
-    sc.render.resolution_x = size
-    sc.render.resolution_y = size
+    sc.render.resolution_x = width
+    sc.render.resolution_y = height
     sc.render.resolution_percentage = 100
     sc.cycles.samples = 1
     sc.frame_start = sc.frame_end = 1
@@ -148,10 +148,23 @@ def setup_bake_target(me, img, obj_name):
 
 def bake_one(scene, obj, slice_path, size):
     me = obj.data
-    me.uv_layers.active_index = 1 if len(me.uv_layers) >= 2 else 0
+    if len(me.uv_layers) < 2:
+        raise RuntimeError(
+            "%s: expected UV0 + UV2, got %d UV layer(s)"
+            % (obj.name, len(me.uv_layers))
+        )
+    me.uv_layers.active_index = 1
+    width = int(size[0])
+    height = int(size[1])
 
-    img = bpy.data.images.new("LM_%s" % obj.name, width=size, height=size,
-                              float_buffer=True, is_data=True)
+    img = bpy.data.images.new(
+        "LM_%s" % obj.name,
+        width=width,
+        height=height,
+        float_buffer=True,
+        is_data=True
+    )
+
     setup_bake_target(me, img, obj.name)
 
     bpy.ops.object.select_all(action='DESELECT')
@@ -165,8 +178,11 @@ def bake_one(scene, obj, slice_path, size):
     img.filepath_raw = slice_path
     img.file_format = 'OPEN_EXR'
     img.save()  # raw bake, kept if denoise can't produce output below
-    if DENOISE and not denoise_over(img, slice_path, size):
-        out("PAVLAKA_BAKE: WARNING: denoise produced no output for %s; using raw bake" % obj.name)
+    if DENOISE and not denoise_over(img, slice_path, width, height):
+        out(
+            "PAVLAKA_BAKE: WARNING: denoise produced no output for %s; using raw bake"
+            % obj.name
+        )
 
 
 def setup_device(scene):
@@ -329,7 +345,8 @@ def main():
             n += 1
         used_names.add(fname)
         slice_file = fname + ".exr"
-        size = int(SIZES.get(obj.name, DEFAULT_SIZE))
+        size = SIZES.get(obj.name, DEFAULT_SIZE)
+
         try:
             bake_one(scene, obj, os.path.join(out_dir, slice_file), size)
             meshes_meta.append({"name": obj.name, "file": slice_file})
