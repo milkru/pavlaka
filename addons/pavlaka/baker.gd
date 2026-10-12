@@ -484,7 +484,7 @@ static func _find_environment(node: Node) -> Environment:
 
 static func _gather_into(node: Node, export_root: Node3D, node_to_key: Dictionary, work_abs: String, out_lights: Array, out_emissive: Array) -> void:
 	for c in node.get_children():
-		if c is MeshInstance3D and (c as MeshInstance3D).is_visible_in_tree() and (c as MeshInstance3D).mesh != null:
+		if c is MeshInstance3D and (c as MeshInstance3D).is_visible_in_tree() and (c as MeshInstance3D).gi_mode != MeshInstance3D.GI_MODE_DISABLED and (c as MeshInstance3D).mesh != null:
 			var mi := c as MeshInstance3D
 			var copy := MeshInstance3D.new()
 			# targets keep their unique key; occluders get a unique fallback so glTF never renames
