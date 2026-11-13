@@ -94,6 +94,14 @@ func _run() -> void:
 
 To cancel a scripted bake, pass a one-element array and set `cancelled[0] = true` from somewhere else.
 
+### Baking a whole scene
+
+The plugin also bakes a scene without any dialog: it opens the scene, bakes its first `BlenderLightmapGI` with the Blender `pavlaka` found, saves the `.lmbake` where the node's light data already is (else next to the scene), and saves the scene.
+
+* **From an editor script:** `await Engine.get_meta("pavlaka_plugin").bake_scene("res://level.tscn")` returns `{ok, scene, ms, data, meshes, error}`. An empty path bakes the open scene.
+* **From the command line:** `godot --editor --path <project> -- --pavlaka-bake res://level.tscn` opens the editor, bakes, saves, prints the result as one JSON line and quits. Baking needs the GPU renderer, so not `--headless`.
+* **From an AI assistant:** when the [godot-ai](https://github.com/hi-godot/godot-ai) plugin is installed, `pavlaka` registers the MCP tool `pavlaka_bake` (params `{scene}`; godot-ai's `custom_manage`), which replies once the bake is done.
+
 ## Things to watch out for
 
 * Meshes without UV2 are skipped.

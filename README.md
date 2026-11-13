@@ -24,7 +24,7 @@ It is a Godot editor plugin that adds a `BlenderLightmapGI` node with a **Bake L
   Meshes update in the viewport as they finish baking, so you can watch the scene come together.
 
 * **Scriptable:**
-  Bakes can be started from editor scripts with `PavlakaBaker.bake(...)`, which makes batch baking and automation easier.
+  Bakes can be started from editor scripts with `PavlakaBaker.bake(...)`, from the command line with `--pavlaka-bake`, or by an AI assistant through the [godot-ai](https://github.com/hi-godot/godot-ai) MCP, which makes batch baking and automation easier.
 
 ## Requirements
 
