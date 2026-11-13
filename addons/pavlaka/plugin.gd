@@ -1,10 +1,13 @@
 @tool
 extends EditorPlugin
 ## pavlaka EditorPlugin. When a BlenderLightmapGI node is selected, a "Bake Lightmaps" button
-## appears in the 3D toolbar and bakes its scene. The Blender path comes from the project
-## setting "pavlaka/blender_path" (auto-detected on enable).
+## appears in the 3D toolbar and bakes its scene. The Blender path comes from the environment
+## variable PAVLAKA_BLENDER when it is set, else from the project setting "pavlaka/blender_path"
+## (auto-detected on enable).
 
 const SETTING_BLENDER := "pavlaka/blender_path"
+## Names the Blender executable without storing its path in the project (portable setups, CI).
+const ENV_BLENDER := "PAVLAKA_BLENDER"
 
 var _btn: Button
 var _builtin_btn: Button
@@ -33,7 +36,7 @@ func _enter_tree() -> void:
 	ProjectSettings.set_as_basic(SETTING_BLENDER, true)
 
 	# auto-detect Blender on first install; the user can change it in Project Settings later
-	if String(ProjectSettings.get_setting(SETTING_BLENDER, "")).is_empty():
+	if String(ProjectSettings.get_setting(SETTING_BLENDER, "")).is_empty() and OS.get_environment(ENV_BLENDER).is_empty():
 		var found := _detect_blender()
 		if not found.is_empty():
 			ProjectSettings.set_setting(SETTING_BLENDER, found)
@@ -206,6 +209,9 @@ func _on_builtin_vis() -> void:
 
 
 func _blender_path() -> String:
+	var env := OS.get_environment(ENV_BLENDER)
+	if not env.is_empty():
+		return env
 	return ProjectSettings.get_setting(SETTING_BLENDER, "")
 
 

@@ -46,6 +46,14 @@ All settings live on the `BlenderLightmapGI` node.
 | `indirect_clamp`                              | Helps remove fireflies, which are bright speckles in noisy bakes. `0` disables it. Try around `10` if needed.                    |
 | `compress_lightmaps`                          | Reduces GPU memory use by roughly 4x, with some quality loss. Off by default.                                                    |
 
+## Choosing the Blender executable
+
+`pavlaka` looks for Blender in this order:
+
+1. The environment variable `PAVLAKA_BLENDER`, when it is set. Nothing is written to the project, so this suits projects kept in version control and machines with their own Blender in a different place.
+2. The project setting `pavlaka/blender_path`.
+3. If both are empty when the plugin is enabled, `pavlaka` searches `PATH` and the usual install folders and writes what it finds to the project setting.
+
 ## GPU and CPU baking
 
 `pavlaka` uses GPU baking by default because it is usually much faster.
