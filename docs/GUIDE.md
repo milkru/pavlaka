@@ -50,9 +50,9 @@ All settings live on the `BlenderLightmapGI` node.
 
 `pavlaka` looks for Blender in this order:
 
-1. The environment variable `PAVLAKA_BLENDER`, when it is set. Nothing is written to the project, so this suits projects kept in version control and machines with their own Blender in a different place.
+1. The environment variable `PAVLAKA_BLENDER`, when it names an existing file. Nothing is written to the project, so this suits projects kept in version control and machines with their own Blender in a different place.
 2. The project setting `pavlaka/blender_path`.
-3. If both are empty when the plugin is enabled, `pavlaka` searches `PATH` and the usual install folders and writes what it finds to the project setting.
+3. If neither names a Blender when the plugin is enabled, `pavlaka` searches `PATH` and the usual install folders and writes what it finds to the project setting.
 
 ## GPU and CPU baking
 
@@ -96,11 +96,11 @@ To cancel a scripted bake, pass a one-element array and set `cancelled[0] = true
 
 ### Baking a whole scene
 
-The plugin also bakes a scene without any dialog: it opens the scene, bakes its first `BlenderLightmapGI` with the Blender `pavlaka` found, saves the `.lmbake` where the node's light data already is (else next to the scene), and saves the scene.
+The plugin also bakes a scene without any dialog: it opens the scene (reloading it from disk when it is already open; a scene with unsaved changes in the editor is refused), bakes its first `BlenderLightmapGI` with the Blender `pavlaka` found, saves the `.lmbake` where the node's light data already is (else next to the scene), and saves the scene.
 
 * **From an editor script:** `await Engine.get_meta("pavlaka_plugin").bake_scene("res://level.tscn")` returns `{ok, scene, ms, data, meshes, error}`. An empty path bakes the open scene.
 * **From the command line:** `godot --editor --path <project> -- --pavlaka-bake res://level.tscn` opens the editor, bakes, saves, prints the result as one JSON line and quits. Baking needs the GPU renderer, so not `--headless`.
-* **From an AI assistant:** when the [godot-ai](https://github.com/hi-godot/godot-ai) plugin is installed, `pavlaka` registers the MCP tool `pavlaka_bake` (params `{scene}`; godot-ai's `custom_manage`), which replies once the bake is done.
+* **From an AI assistant:** when the [godot-ai](https://github.com/hi-godot/godot-ai) plugin is installed, `pavlaka` registers the MCP tool `pavlaka_bake` (params `{scene}`; godot-ai's `custom_manage`), which replies once the bake is done. godot-ai waits at most 2 minutes for a reply, so a longer bake replies `{running: true}` first; then `pavlaka_bake_status` tells whether it is still running and gives the last bake's result.
 
 ## Things to watch out for
 

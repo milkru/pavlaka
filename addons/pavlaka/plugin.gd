@@ -2,21 +2,24 @@
 extends EditorPlugin
 ## pavlaka EditorPlugin. When a BlenderLightmapGI node is selected, a "Bake Lightmaps" button
 ## appears in the 3D toolbar and bakes its scene. The Blender path comes from the environment
-## variable PAVLAKA_BLENDER when it is set, else from the project setting "pavlaka/blender_path"
-## (auto-detected on enable).
+## variable PAVLAKA_BLENDER when it names an existing file, else from the project setting
+## "pavlaka/blender_path" (auto-detected on enable).
 ##
 ## Bakes can also start without the button: [method bake_scene] from an editor script, the
 ## command line (`godot --editor --path <project> -- --pavlaka-bake res://scene.tscn`: bakes,
-## saves, prints one JSON line, quits), or, when the godot-ai plugin is installed, its MCP tool
-## "pavlaka_bake".
+## saves, prints one JSON line, quits), or, when the godot-ai plugin is installed, its MCP tools
+## "pavlaka_bake" and "pavlaka_bake_status".
 
 const SETTING_BLENDER := "pavlaka/blender_path"
 ## Names the Blender executable without storing its path in the project (portable setups, CI).
 const ENV_BLENDER := "PAVLAKA_BLENDER"
 ## Command-line flag: bake the scene that follows it, save it, and quit the editor.
 const BAKE_ARG := "--pavlaka-bake"
-## The godot-ai MCP tool (registered only when godot-ai is installed).
+## The godot-ai MCP tools (registered only when godot-ai is installed).
 const MCP_TOOL := "pavlaka_bake"
+const MCP_STATUS_TOOL := "pavlaka_bake_status"
+## godot-ai drops a deferred reply after its 120 s limit, so a longer bake replies "running" first.
+const MCP_REPLY_SEC := 110.0
 const MCP_HANDLER := "res://addons/pavlaka/mcp_bake.gd"
 const PLUGIN_CFG := "res://addons/pavlaka/plugin.cfg"
 
@@ -31,6 +34,13 @@ var _progress_timer: Timer
 var _cancel_btn: Button
 var _cancelled: Array = [false]
 var _bake_start_ms := 0
+# the save dialog of a toolbar bake is open (no other bake may start meanwhile)
+var _preparing := false
+# the last bake_scene result, for the status tool
+var _last_result: Dictionary = {}
+# godot-ai builds a new registry when it reloads; re-register with each new one
+var _mcp_timer: Timer
+var _mcp_registry_id := 0
 
 
 func _enter_tree() -> void:
@@ -47,7 +57,7 @@ func _enter_tree() -> void:
 	ProjectSettings.set_as_basic(SETTING_BLENDER, true)
 
 	# auto-detect Blender on first install; the user can change it in Project Settings later
-	if String(ProjectSettings.get_setting(SETTING_BLENDER, "")).is_empty() and OS.get_environment(ENV_BLENDER).is_empty():
+	if String(ProjectSettings.get_setting(SETTING_BLENDER, "")).is_empty() and not FileAccess.file_exists(OS.get_environment(ENV_BLENDER)):
 		var found := _detect_blender()
 		if not found.is_empty():
 			ProjectSettings.set_setting(SETTING_BLENDER, found)
@@ -74,7 +84,13 @@ func _enter_tree() -> void:
 	_on_selection_changed()
 
 	Engine.set_meta("pavlaka_plugin", self)
-	_register_mcp_tool.call_deferred(10)
+	if _global_script("McpToolRegistry") != null:
+		_mcp_timer = Timer.new()
+		_mcp_timer.wait_time = 2.0
+		_mcp_timer.timeout.connect(_register_mcp_tools)
+		add_child(_mcp_timer)
+		_mcp_timer.start()
+		_register_mcp_tools.call_deferred()
 	var args := OS.get_cmdline_user_args()
 	var i := args.find(BAKE_ARG)
 	if i >= 0 and i + 1 < args.size():
@@ -84,9 +100,13 @@ func _enter_tree() -> void:
 func _exit_tree() -> void:
 	if Engine.has_meta("pavlaka_plugin"):
 		Engine.remove_meta("pavlaka_plugin")
+	if _mcp_timer:
+		_mcp_timer.queue_free()
+		_mcp_timer = null
 	var reg := _mcp_registry()
 	if reg:
 		reg.unregister(MCP_TOOL)
+		reg.unregister(MCP_STATUS_TOOL)
 	var sel := EditorInterface.get_selection()
 	if sel.selection_changed.is_connected(_on_selection_changed):
 		sel.selection_changed.disconnect(_on_selection_changed)
@@ -233,7 +253,7 @@ func _on_builtin_vis() -> void:
 
 func _blender_path() -> String:
 	var env := OS.get_environment(ENV_BLENDER)
-	if not env.is_empty():
+	if not env.is_empty() and FileAccess.file_exists(env):
 		return env
 	return ProjectSettings.get_setting(SETTING_BLENDER, "")
 
@@ -300,8 +320,8 @@ func _blender_version_key(exe_path: String) -> int:
 
 
 func _on_bake_pressed() -> void:
-	if _baking:
-		return # re-entry guard: a bake is already running
+	if _baking or _preparing:
+		return # re-entry guard: a bake is already running or being set up
 	if _current == null:
 		push_error("pavlaka: select a BlenderLightmapGI node first")
 		return
@@ -318,20 +338,26 @@ func _on_bake_pressed() -> void:
 		push_error("pavlaka: Blender not found at '%s' — fix Project Settings → pavlaka/blender_path" % blender)
 		return
 
+	# capture the node locally: _current follows the selection, which can change mid-bake
+	var node := _current
+
 	# Resolve where to save the .lmbake: reuse the existing path if already baked, else prompt
 	# (defaulting next to the scene; an unsaved scene has no default and is always prompted).
 	var save_path := ""
-	var data: LightmapGIData = _current.light_data
+	var data: LightmapGIData = node.light_data
 	if data != null and data.resource_path.begins_with("res://"):
 		save_path = data.resource_path
 	else:
 		var default_path := _default_lmbake_path(root)
+		_preparing = true
 		save_path = await _prompt_save_path(default_path)
+		_preparing = false
 		if save_path.is_empty():
 			return # cancelled
-
-	# capture the node locally: _current follows the selection, which can change mid-bake
-	var node := _current
+		# the scene may have been closed or switched while the dialog was open
+		if not is_instance_valid(node) or not is_instance_valid(root) or not root.is_inside_tree():
+			push_error("pavlaka: the scene closed before the bake started")
+			return
 	# remember the prior light_data path, to mark the scene unsaved only if the bake changes it
 	var prev_data: LightmapGIData = node.light_data
 	var prev_path := prev_data.resource_path if prev_data != null else ""
@@ -372,11 +398,23 @@ func _run_bake(root: Node3D, node: BlenderLightmapGI, blender: String, save_path
 ## `scene_path` first, or bakes the open scene when it's empty. The .lmbake goes where the node's
 ## light data already is, else next to the scene. Returns {ok, scene, ms, data, meshes, error}.
 func bake_scene(scene_path: String = "") -> Dictionary:
-	if _baking:
+	if _baking or _preparing:
 		return {"ok": false, "error": "a bake is already running"}
+	_last_result = await _bake_scene(scene_path)
+	return _last_result
+
+
+func _bake_scene(scene_path: String) -> Dictionary:
 	if not scene_path.is_empty():
 		if not ResourceLoader.exists(scene_path):
 			return {"ok": false, "scene": scene_path, "error": "no such scene"}
+		if scene_path in EditorInterface.get_open_scenes():
+			# an open tab isn't reloaded when its file changes on disk (Godot checks on focus-in), so
+			# reload it before baking; edits of its own would be lost, so refuse then
+			if scene_path in EditorInterface.get_unsaved_scenes():
+				return {"ok": false, "scene": scene_path,
+					"error": "the scene has unsaved changes in the editor: save or discard them first"}
+			EditorInterface.reload_scene_from_path(scene_path)
 		EditorInterface.open_scene_from_path(scene_path)
 	var root := EditorInterface.get_edited_scene_root()
 	if root == null or not (root is Node3D):
@@ -397,15 +435,40 @@ func bake_scene(scene_path: String = "") -> Dictionary:
 		save_path = node.light_data.resource_path
 	if save_path.is_empty():
 		return {"ok": false, "error": "save the scene first: the bake goes next to it"}
+	var scene_file := root.scene_file_path
 	var t0 := Time.get_ticks_msec()
 	var err := await _run_bake(root, node, blender, save_path)
-	var ok := err == OK and node.light_data != null
-	if ok:
-		EditorInterface.save_scene()
-	return {"ok": ok, "scene": root.scene_file_path, "ms": Time.get_ticks_msec() - t0,
+	if not is_instance_valid(root) or not is_instance_valid(node):
+		return {"ok": false, "scene": scene_file, "error": "the scene was closed during the bake"}
+	var error := "" if err == OK else error_string(err)
+	if err == OK and node.light_data == null:
+		error = "the bake made no light data"
+	if error.is_empty():
+		error = _save_baked_scene(root, scene_file)
+	return {"ok": error.is_empty(), "scene": scene_file, "ms": Time.get_ticks_msec() - t0,
 		"data": node.light_data.resource_path if node.light_data else "",
 		"meshes": node.light_data.get_user_count() if node.light_data else 0,
-		"error": "" if err == OK else error_string(err)}
+		"error": error}
+
+
+# Save the baked scene, not whichever tab is active now. "" when saved, else the reason.
+func _save_baked_scene(root: Node, scene_file: String) -> String:
+	if scene_file.is_empty():
+		return "the scene has no file to save to"
+	if EditorInterface.get_edited_scene_root() != root:
+		EditorInterface.open_scene_from_path(scene_file)
+	if EditorInterface.get_edited_scene_root() != root:
+		return "the baked scene is no longer open, so it was not saved"
+	# save_scene() reports OK even when the write fails; the tab staying unsaved tells
+	EditorInterface.mark_scene_as_unsaved()
+	if EditorInterface.save_scene() != OK or scene_file in EditorInterface.get_unsaved_scenes():
+		return "the scene could not be saved"
+	return ""
+
+
+## The last bake_scene result and whether a bake is running (the status tool's reply).
+func bake_status() -> Dictionary:
+	return {"running": _baking or _preparing, "last": _last_result}
 
 
 # --pavlaka-bake: wait until the editor has opened, bake, print the result, quit.
@@ -421,14 +484,23 @@ func _bake_and_quit(scene_path: String) -> void:
 
 
 ## The godot-ai tool's work (mcp_bake.gd): bake, then send the result as its deferred reply
-## (godot-ai's shapes: {data} on success, {status, error: {code, message}} on failure).
+## (godot-ai's shapes: {data} on success, {status, error: {code, message}} on failure). A bake
+## still running after MCP_REPLY_SEC replies {running: true}; pavlaka_bake_status has the result.
 func mcp_bake(scene_path: String, ctx: Object) -> void:
 	await get_tree().process_frame  # out of the deferred call first
+	var state := {"replied": false}
+	var reply := func(payload: Dictionary) -> void:
+		if not state.replied:
+			state.replied = true
+			ctx.send_deferred(payload)
+	get_tree().create_timer(MCP_REPLY_SEC).timeout.connect(func() -> void:
+		reply.call({"data": {"running": true, "scene": scene_path,
+			"next": "call %s until running is false; its 'last' is this bake's result" % MCP_STATUS_TOOL}}))
 	var result := await bake_scene(scene_path)
 	if result.get("ok", false):
-		ctx.send_deferred({"data": result})
+		reply.call({"data": result})
 	else:
-		ctx.send_deferred({"status": "error", "error": {"code": "BAKE_FAILED",
+		reply.call({"status": "error", "error": {"code": "BAKE_FAILED",
 			"message": str(result.get("error", ""))}})
 
 
@@ -445,30 +517,39 @@ func _mcp_registry() -> Object:
 	return reg.get_instance() if reg else null
 
 
-# Register the "pavlaka_bake" tool with godot-ai when it's there (it may start after pavlaka).
-func _register_mcp_tool(tries: int) -> void:
-	if not is_inside_tree():
-		return
+# Register pavlaka's tools with godot-ai's registry, once per registry: godot-ai may start after
+# pavlaka, and its reload makes a new registry without them (the timer calls this every 2 s).
+func _register_mcp_tools() -> void:
 	var reg := _mcp_registry()
-	var spec_script := _global_script("McpCustomToolSpec")
-	if reg == null or spec_script == null:
-		if tries > 0 and _global_script("McpToolRegistry") != null:
-			await get_tree().create_timer(1.0).timeout
-			_register_mcp_tool(tries - 1)
+	if reg == null or not reg.is_ready() or reg.get_instance_id() == _mcp_registry_id:
 		return
-	var spec: Object = spec_script.new()
-	spec.name = MCP_TOOL
-	spec.description = ("Bake a scene's lightmaps with pavlaka (Blender's Cycles) and save the scene. "
+	var spec_script := _global_script("McpCustomToolSpec")
+	if spec_script == null:
+		return
+	var bake: Object = spec_script.new()
+	bake.name = MCP_TOOL
+	bake.description = ("Bake a scene's lightmaps with pavlaka (Blender's Cycles) and save the scene. "
 		+ "params: {scene: res:// path of a scene with a BlenderLightmapGI (empty = the open scene)}. "
-		+ "Returns {ok, scene, ms, data, meshes, error}.")
-	spec.params_schema = {"type": "object", "properties": {"scene": {"type": "string"}}}
-	spec.script_path = MCP_HANDLER
-	spec.method = &"bake"
-	spec.source_path = PLUGIN_CFG
-	spec.deferred = true
-	spec.timeout_ms = 120000
-	spec.requires_writable = true
-	reg.register(spec)
+		+ "Returns {ok, scene, ms, data, meshes, error}, or {running: true} when the bake outlasts "
+		+ "%d s (then %s gives the result)." % [int(MCP_REPLY_SEC), MCP_STATUS_TOOL])
+	bake.params_schema = {"type": "object", "properties": {"scene": {"type": "string"}}}
+	bake.script_path = MCP_HANDLER
+	bake.method = &"bake"
+	bake.source_path = PLUGIN_CFG
+	bake.deferred = true
+	bake.timeout_ms = 120000  # godot-ai's maximum
+	bake.requires_writable = true
+	var status: Object = spec_script.new()
+	status.name = MCP_STATUS_TOOL
+	status.description = ("Whether a pavlaka bake is running, and the last bake's result: "
+		+ "{running, last: {ok, scene, ms, data, meshes, error}}.")
+	status.params_schema = {"type": "object", "properties": {}}
+	status.script_path = MCP_HANDLER
+	status.method = &"status"
+	status.source_path = PLUGIN_CFG
+	reg.register(bake)
+	reg.register(status)
+	_mcp_registry_id = reg.get_instance_id()  # once per registry, so a rejection isn't retried
 
 
 # Default .lmbake path: next to the scene, named after it. "" if the scene isn't saved.
