@@ -77,7 +77,10 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 	for i in targets.size():
 		var k: String = targets[i].key
 		place_by_key[k] = placements[i]
-		size_by_key[k] = (placements[i]["rect"] as Rect2i).size.x # chunks are square
+		size_by_key[k] = [
+			(placements[i]["rect"] as Rect2i).size.x,
+			(placements[i]["rect"] as Rect2i).size.y
+		]
 		target_by_key[k] = targets[i]
 
 	# 3. export geometry + lights to a temp glb. Build a fresh world-space copy tree, not
@@ -163,7 +166,11 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 				composited[k] = true
 				streamed = true
 				var disp: String = target_by_key[k].name if target_by_key.has(k) else k
-				print("pavlaka: baked %d/%d  %s" % [composited.size(), targets.size(), disp])
+				print("pavlaka: baked %d/%d  %s" % [
+					composited.size(),
+					targets.size(),
+					disp
+				])
 		if streamed:
 			var prev := _make_data(_preview_texes(page_imgs), place_by_key, page_dims,
 				composited.keys(), target_by_key, bounds, 1.0)
@@ -600,44 +607,86 @@ static func _pack_pages(targets: Array[Target], max_texture_size: int, texel_sca
 	var cap := maxi(64, max_texture_size)
 	var inner := maxi(1, cap - ATLAS_GUTTER) # leave a gutter so nothing touches the edge
 	var density: float = BASE_DENSITY * (texel_scale if texel_scale > 0.0001 else 1.0)
-	var sizes: Array[int] = []
+	var sizes: Array[Vector2i] = []
 	var fallbacks: Array[String] = []
 	for t in targets:
-		var s := int(maxi(8, roundi(sqrt(_world_surface_area(t.node)) * density)))
-		if s > inner:
-			s = inner # too big for a page: shrink to fit (lower density) instead of erroring
+		var hint := t.node.mesh.get_lightmap_size_hint()
+		if hint == Vector2i.ZERO:
+			hint = Vector2i(64, 64) # this feels a bit crude
+		var s := Vector2i(
+			maxi(8, roundi(float(hint.x) * texel_scale)),
+			maxi(8, roundi(float(hint.y) * texel_scale))
+		)
+		if s.x > inner or s.y > inner: # too big for a page: shrink to fit (lower density) instead of erroring
+			var scale := min(
+				float(inner) / float(s.x),
+				float(inner) / float(s.y)
+			)
+			s = Vector2i(
+				maxi(8, floori(float(s.x) * scale)),
+				maxi(8, floori(float(s.y) * scale))
+			)
 			fallbacks.append(t.name)
 		sizes.append(s)
 	# place largest chunks first (better shelf packing), first-fit across pages
 	var order := range(targets.size())
-	order.sort_custom(func(a, b): return sizes[a] > sizes[b])
+	order.sort_custom(func(a, b):
+		return sizes[a].x * sizes[a].y > sizes[b].x * sizes[b].y
+	)
 	var pages: Array = [] # each: { "bottom": int, "shelves": Array[{y,h,x}] }
 	var placements: Array = []
 	placements.resize(targets.size())
 	for idx in order:
-		var s: int = sizes[idx]
-		var cell := s + ATLAS_GUTTER
+		var s: Vector2i = sizes[idx]
+		var cell := Vector2i(
+			s.x + ATLAS_GUTTER,
+			s.y + ATLAS_GUTTER
+		)
 		var placed := false
 		for pi in pages.size():
 			var pg: Dictionary = pages[pi]
 			for shelf in pg["shelves"]:
-				if shelf["x"] + cell <= cap and cell <= shelf["h"]:
-					placements[idx] = {"page": pi, "rect": _cell_rect(shelf["x"], shelf["y"], s)}
-					shelf["x"] += cell
+				if shelf["x"] + cell.x <= cap and cell.y <= shelf["h"]:
+					placements[idx] = {
+						"page": pi,
+						"rect": _cell_rect(
+							shelf["x"],
+							shelf["y"],
+							s
+						)
+					}
+					shelf["x"] += cell.x
 					placed = true
 					break
 			if placed:
 				break
-			if pg["bottom"] + cell <= cap: # open a new shelf in this page
+			if pg["bottom"] + cell.y <= cap: # open a new shelf in this page
 				var y: int = pg["bottom"]
-				pg["shelves"].append({"y": y, "h": cell, "x": cell})
-				pg["bottom"] = y + cell
-				placements[idx] = {"page": pi, "rect": _cell_rect(0, y, s)}
+				pg["shelves"].append({
+					"y": y,
+					"h": cell.y,
+					"x": cell.x
+				})
+				pg["bottom"] = y + cell.y
+				placements[idx] = {
+					"page": pi,
+					"rect": _cell_rect(0, y, s)
+				}
 				placed = true
 				break
 		if not placed: # need a new page
-			pages.append({"bottom": cell, "shelves": [{"y": 0, "h": cell, "x": cell}]})
-			placements[idx] = {"page": pages.size() - 1, "rect": _cell_rect(0, 0, s)}
+			pages.append({
+				"bottom": cell.y,
+				"shelves": [{
+					"y": 0,
+					"h": cell.y,
+					"x": cell.x
+				}]
+			})
+			placements[idx] = {
+				"page": pages.size() - 1,
+				"rect": _cell_rect(0, 0, s)
+			}
 	# size each page to its content, rounded up to a multiple of 4, capped at the max
 	var page_dims: Array = []
 	page_dims.resize(pages.size())
@@ -662,10 +711,13 @@ static func _round_up(v: int, mult: int) -> int:
 
 
 # Content rect inside a gutter-padded cell whose top-left is (cx, cy), content side s.
-static func _cell_rect(cx: int, cy: int, s: int) -> Rect2i:
+static func _cell_rect(cx: int, cy: int, s: Vector2i) -> Rect2i:
 	@warning_ignore("integer_division")
 	var h := ATLAS_GUTTER / 2
-	return Rect2i(Vector2i(cx + h, cy + h), Vector2i(s, s))
+	return Rect2i(
+		Vector2i(cx + h, cy + h),
+		s
+	)
 
 
 static func _world_aabb(targets: Array[Target]) -> AABB:
