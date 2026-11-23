@@ -16,6 +16,7 @@ The plugin runs this non-blocking and can't read stdout, so output is mirrored t
 <out_dir>/bake.log and the whole run is wrapped so a fatal error still writes baked.json.
 """
 import bpy
+import math
 import sys
 import os
 import re
@@ -200,6 +201,79 @@ def setup_device(scene):
     scene.cycles.device = 'CPU'
 
 
+# Godot draws a surface lit by a light of energy E as albedo * E * cos (directional), or albedo *
+# E * cos * attenuation(d) (omni, spot). Cycles' colour-off diffuse bake gives S cos / pi for a sun
+# of strength S, and P cos / (4 pi^2 d^2) for a point or spot light of P watts (measured). So a sun
+# gets E * pi, a point or spot light E * 4 pi^2, and a node tree turns Cycles' 1/d^2 into Godot's
+# attenuation.
+SUN_SCALE = math.pi
+POINT_SCALE = 4.0 * math.pi * math.pi
+
+
+def set_light(obj, info):
+    """An imported light made to light as Godot draws it (info: from baker.gd)."""
+    lt = obj.data
+    col = info["color"]
+    lt.color = (col[0], col[1], col[2])
+    if lt.type == 'SUN':
+        lt.energy = float(info["energy"]) * SUN_SCALE
+        lt.angle = math.radians(float(info.get("angular_distance", 0.0)))
+        return
+    lt.energy = float(info["energy"]) * POINT_SCALE
+    lt.shadow_soft_size = float(info.get("size", 0.0))  # Godot's light_size, as the light's radius
+    if lt.type == 'SPOT':
+        if float(info.get("spot_angle", 45.0)) > 90.0:
+            lt.type = 'POINT'  # Cycles' cone stops at a hemisphere; the node tree cuts Godot's
+        else:
+            lt.spot_size = 2.0 * math.radians(float(info.get("spot_angle", 45.0)))
+            lt.spot_blend = 0.0
+    if "range" in info:
+        godot_attenuation(lt, info)
+
+
+def _math(nt, op, a, b=None):
+    n = nt.nodes.new("ShaderNodeMath")
+    n.operation = op
+    for i, v in enumerate((a, b)):
+        if v is None:
+            continue
+        if isinstance(v, (int, float)):
+            n.inputs[i].default_value = float(v)
+        else:
+            nt.links.new(v, n.inputs[i])
+    return n.outputs[0]
+
+
+def godot_attenuation(lt, info):
+    """Godot's falloff and cone on a Cycles point or spot light (its emission strength, per shading
+    point). Godot: d^-attenuation * max(1 - (d / range)^4, 0)^2; a spot also 1 - rim^a, rim =
+    (1 - cos t) / (1 - cos spot_angle), t the angle off its axis, a its spot_angle_attenuation.
+    Cycles already falls off by 1/d^2, so the strength is d^(2 - attenuation) times the rest. The
+    light path's ray length is d; the texture coordinate's normal is the direction in the light's
+    space (a spot points along -z). A spot wider than a hemisphere bakes as a point light with this
+    cone (set_light)."""
+    lt.use_nodes = True
+    nt = lt.node_tree
+    em = next((n for n in nt.nodes if n.type == 'EMISSION'), None)
+    if em is None:
+        return
+    d = nt.nodes.new("ShaderNodeLightPath").outputs["Ray Length"]
+    f = _math(nt, 'POWER', _math(nt, 'MAXIMUM', d, 1e-4), 2.0 - float(info.get("attenuation", 1.0)))
+    t4 = _math(nt, 'POWER', _math(nt, 'DIVIDE', d, max(float(info["range"]), 1e-4)), 4.0)
+    window = _math(nt, 'POWER', _math(nt, 'MAXIMUM', _math(nt, 'SUBTRACT', 1.0, t4), 0.0), 2.0)
+    f = _math(nt, 'MULTIPLY', f, window)
+    if "spot_angle" in info:
+        normal = nt.nodes.new("ShaderNodeTexCoord").outputs["Normal"]
+        xyz = nt.nodes.new("ShaderNodeSeparateXYZ")
+        nt.links.new(normal, xyz.inputs[0])
+        cos_t = _math(nt, 'MULTIPLY', xyz.outputs["Z"], -1.0)
+        cut = 1.0 - math.cos(math.radians(float(info.get("spot_angle", 45.0))))
+        rim = _math(nt, 'MAXIMUM', _math(nt, 'DIVIDE', _math(nt, 'SUBTRACT', 1.0, cos_t), max(cut, 1e-4)), 1e-4)
+        cone = _math(nt, 'SUBTRACT', 1.0, _math(nt, 'POWER', rim, float(info.get("spot_angle_attenuation", 1.0))))
+        f = _math(nt, 'MULTIPLY', f, _math(nt, 'MAXIMUM', cone, 0.0))
+    nt.links.new(f, em.inputs["Strength"])
+
+
 def apply_emission(obj):
     """Rebuild emission from Godot's material on each slot listed in EMISSIVE, since the glb
     round-trip keeps the emission color but drops the emission texture. Overrides the Principled
@@ -289,15 +363,10 @@ def main():
         bg.inputs[0].default_value = (AMBIENT_RGB[0], AMBIENT_RGB[1], AMBIENT_RGB[2], 1.0)
         bg.inputs[1].default_value = AMBIENT
 
-    # Override imported lights with Godot's energy/color, scaling energy by pi: Godot normalizes
-    # analytic lights by pi (light_storage.cpp `energy *= PI`) while Cycles' Color-OFF bake outputs
-    # irradiance/pi, so `energy * pi` matches. Point/spot still use Cycles' inverse-square falloff.
+    # Override imported lights with Godot's: energy, colour, falloff, cone, size (set_light)
     for obj in bpy.data.objects:
         if obj.type == 'LIGHT' and obj.name in LIGHTS:
-            info = LIGHTS[obj.name]
-            obj.data.energy = float(info["energy"]) * 3.141592653589793
-            col = info["color"]
-            obj.data.color = (col[0], col[1], col[2])
+            set_light(obj, LIGHTS[obj.name])
 
     for obj in bpy.data.objects:
         if obj.type == 'MESH':

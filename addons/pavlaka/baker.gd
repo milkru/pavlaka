@@ -509,7 +509,16 @@ static func _gather_into(node: Node, export_root: Node3D, node_to_key: Dictionar
 			export_root.add_child(lcopy)
 			lcopy.owner = export_root
 			var lin := src.light_color.srgb_to_linear()
-			out_lights.append({"name": key, "energy": src.light_energy, "color": [lin.r, lin.g, lin.b]})
+			var info := {"name": key, "energy": src.light_energy, "color": [lin.r, lin.g, lin.b]}
+			# what Cycles needs to light as Godot draws: falloff, range, cone, size (bake.py set_light)
+			if src is OmniLight3D:
+				info.merge({"range": src.omni_range, "attenuation": src.omni_attenuation, "size": src.light_size})
+			elif src is SpotLight3D:
+				info.merge({"range": src.spot_range, "attenuation": src.spot_attenuation, "size": src.light_size,
+					"spot_angle": src.spot_angle, "spot_angle_attenuation": src.spot_angle_attenuation})
+			elif src is DirectionalLight3D:
+				info["angular_distance"] = src.light_angular_distance
+			out_lights.append(info)
 		_gather_into(c, export_root, node_to_key, work_abs, out_lights, out_emissive)
 
 
