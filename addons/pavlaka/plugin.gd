@@ -358,17 +358,21 @@ func _on_bake_pressed() -> void:
 		if not is_instance_valid(node) or not is_instance_valid(root) or not root.is_inside_tree():
 			push_error("pavlaka: the scene closed before the bake started")
 			return
-	# remember the prior light_data path, to mark the scene unsaved only if the bake changes it
+	# remember the prior light_data and light groups paths, to mark the scene unsaved only if the
+	# bake changes them
 	var prev_data: LightmapGIData = node.light_data
 	var prev_path := prev_data.resource_path if prev_data != null else ""
+	var prev_groups := node.light_groups.resource_path if node.light_groups != null else ""
 
 	var err := await _run_bake(root, node, blender, save_path)
 
-	# mark unsaved only if the node now points at a different .lmbake, so a first bake isn't lost
-	# on reload while a re-bake to the same path leaves the .tscn clean.
-	if err == OK and is_instance_valid(node) and node.light_data != null \
-			and node.light_data.resource_path != prev_path:
-		EditorInterface.mark_scene_as_unsaved()
+	# mark unsaved only if the node now points at a different .lmbake or light groups (added or
+	# dropped), so a first bake isn't lost on reload while a re-bake to the same paths leaves the
+	# .tscn clean.
+	if err == OK and is_instance_valid(node) and node.light_data != null:
+		var groups := node.light_groups.resource_path if node.light_groups != null else ""
+		if node.light_data.resource_path != prev_path or groups != prev_groups:
+			EditorInterface.mark_scene_as_unsaved()
 
 
 # One bake with the toolbar's progress strip (in place of the bake button; it stays up across

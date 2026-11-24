@@ -66,6 +66,29 @@ If a mesh is too large to fit one lightmap page, `pavlaka` scales that mesh's li
 
 This lets the bake continue instead of failing the whole scene.
 
+## Emission that lights more than it shows
+
+An emissive surface bakes the light its material's Emission Energy gives. To cast more (or less) light while it still looks the same, give its `MeshInstance3D` the metadata `lightmap_emission_energy`: the energy its emissive surfaces bake at. The material's own energy still draws it.
+
+## Light groups
+
+Light that changes while the game runs (a flickering flame, a light switched on) can still be baked. Put its lights and emissive meshes in a **light group**: give the node the metadata `light_group` with the group's name (a `Light3D` for its light, a `MeshInstance3D` for the light its emissive surfaces give).
+
+`pavlaka` bakes the main lightmap without the groups, then bakes each group on its own (only its lights and emission, no sky). Light adds up, so the main lightmap plus every group at full strength is the whole light. Each group keeps only the tiles of the lightmap (16 x 16 texels) its light reaches, packed into `<name>_groups.exr` next to the `.lmbake`, with `<name>_groups.res`.
+
+In the game, set a group's strength on the `BlenderLightmapGI`:
+
+```gdscript
+lm.set_light_group_energy("flames", 0.6)  # 1 as baked, 0 off
+```
+
+The GPU adds every group to the lightmap at its strength, and the group's emissive surfaces and lights scale with it. The editor shows every group at 1. `get_light_group_names()` lists the groups.
+
+A group keeps only the light that could show at the highest strength you will set. Each member counts as about 2 (2.1) unless its metadata `light_group_max` says otherwise; the group takes the largest.
+
+* Each group is another Cycles pass over the scene, so it adds about one main bake's time.
+* Light groups need the Forward+ or Mobile renderer.
+
 ## Scripting
 
 You can start a bake from an editor tool script. This is useful for batch baking or custom editor tools.

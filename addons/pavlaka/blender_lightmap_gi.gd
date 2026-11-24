@@ -53,10 +53,118 @@ func get_bake_opts() -> Dictionary:
 # instance needs a non-empty AABB or it's culled, so we set bounds directly, not via capture data.
 @export_storage var baked_bounds := AABB()
 
+## The bake's light groups (light that changes while the game runs), or null. A light or a mesh
+## joins a group by its metadata "light_group" (the group's name); see PavlakaLightGroups.
+@export_storage var light_groups: PavlakaLightGroups
+
+var _composer: PavlakaGroupComposer
+## A bake is running (set by PavlakaBaker): the light groups stay off, the preview shows the main
+## bake alone.
+var baking := false
+var _energies := PackedFloat32Array()
+var _dirty := false
+var _scaled := [] # per group: [[Light3D, energy], ...] and [[material copy, emission energy], ...]
+
+
+## The light groups' names.
+func get_light_group_names() -> PackedStringArray:
+	return light_groups.names if light_groups else PackedStringArray()
+
+
+## Sets how strong a light group is: 1 as baked, 0 off. Scales its baked light, its emissive
+## surfaces and its lights (as they light anything live). The editor always shows 1.
+func set_light_group_energy(group: StringName, energy: float) -> void:
+	var i := get_light_group_names().find(group)
+	if i < 0 or i >= _energies.size() or is_equal_approx(_energies[i], energy):  # float32 storage
+		return
+	_energies[i] = energy
+	_dirty = true
+	if i < _scaled.size():
+		for pair in _scaled[i][0]:
+			(pair[0] as Light3D).light_energy = pair[1] * energy
+		for pair in _scaled[i][1]:
+			(pair[0] as BaseMaterial3D).emission_energy_multiplier = pair[1] * energy
+
+
+func get_light_group_energy(group: StringName) -> float:
+	var i := get_light_group_names().find(group)
+	return _energies[i] if i >= 0 and i < _energies.size() else 0.0
+
+
+## Stops adding the light groups (before a bake changes the light data); restart_light_groups()
+## starts again.
+func stop_light_groups() -> void:
+	if _composer:
+		_composer.stop()
+		_composer = null
+	set_process(false)
+
+
+func restart_light_groups() -> void:
+	stop_light_groups()
+	if baking:
+		return
+	if light_groups == null or light_groups.group_count() == 0 or light_data == null:
+		return
+	if _energies.size() != light_groups.group_count():
+		_energies.resize(light_groups.group_count())
+		_energies.fill(1.0)
+	if Engine.is_editor_hint():
+		_energies.fill(1.0)
+	_composer = PavlakaGroupComposer.new()
+	if not _composer.start(light_data, light_groups, _energies):
+		_composer = null
+		push_warning("pavlaka: light groups need the Forward+ or Mobile renderer")
+		return
+	set_process(true)
+
+
+func _process(_delta: float) -> void:
+	if _dirty and _composer:
+		_dirty = false
+		_composer.update(_energies)
+
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_ENTER_TREE:
 		_apply_baked_bounds()
+		if is_node_ready():  # back in the tree (an editor tab switch, a reparent): EXIT_TREE stopped it
+			restart_light_groups()
+	elif what == NOTIFICATION_READY:
+		if not Engine.is_editor_hint():
+			_scale_groups()
+		restart_light_groups()
+	elif what == NOTIFICATION_EXIT_TREE:
+		stop_light_groups()
+
+
+# The game's copies of each group's lights and emissive materials, so energy can scale them.
+# Not in the editor: the scene would save them.
+func _scale_groups() -> void:
+	_scaled.clear()
+	if light_groups == null:
+		return
+	var copies := {} # "<material id>:<group>" -> copy
+	for g in light_groups.group_count():
+		var lights := []
+		for path in (light_groups.lights[g] if g < light_groups.lights.size() else []):
+			var l := get_node_or_null(path) as Light3D
+			if l:
+				lights.append([l, l.light_energy])
+		var mats := []
+		for entry in (light_groups.surfaces[g] if g < light_groups.surfaces.size() else []):
+			var mi := get_node_or_null(entry[0]) as MeshInstance3D
+			if mi == null or mi.mesh == null or int(entry[1]) >= mi.mesh.get_surface_count():
+				continue
+			var mat := mi.get_active_material(int(entry[1])) as BaseMaterial3D
+			if mat == null:
+				continue
+			var key := "%d:%d" % [mat.get_instance_id(), g]
+			if not copies.has(key):
+				copies[key] = mat.duplicate()
+				mats.append([copies[key], mat.emission_energy_multiplier])
+			mi.set_surface_override_material(int(entry[1]), copies[key])
+		_scaled.append([lights, mats])
 
 
 func _apply_baked_bounds() -> void:

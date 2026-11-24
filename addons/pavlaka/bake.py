@@ -12,6 +12,12 @@ Real materials are kept (the bake-target image node is injected into each mesh's
 material rather than replacing it), so indirect bounces pick up surface albedo and emissive
 materials cast light.
 
+Light groups (params "groups"): lights and emissive surfaces in a group are left out of the main
+bake; each group is baked again on its own (only its lights and emission, no sky), so the game can
+add it to the lightmap at any strength. Light adds up, so the main bake plus every group at full
+strength is the whole light. A group keeps only the TILE x TILE texel tiles of each mesh where its
+light reaches its threshold (params "group_thresholds"; baked.json "groups").
+
 The plugin runs this non-blocking and can't read stdout, so output is mirrored to
 <out_dir>/bake.log and the whole run is wrapped so a fatal error still writes baked.json.
 """
@@ -22,6 +28,8 @@ import os
 import re
 import json
 import traceback
+
+import numpy as np
 
 argv = sys.argv
 rest = argv[argv.index("--") + 1:] if "--" in argv else []
@@ -43,12 +51,17 @@ DENOISE = bool(PARAMS.get("denoise", True))
 BOUNCES = int(PARAMS.get("bounces", 3))
 AMBIENT = float(PARAMS.get("ambient_energy", 0.2))
 AMBIENT_RGB = PARAMS.get("ambient_color", [1.0, 1.0, 1.0])
-# name -> {"energy", "color":[r,g,b] linear}; used to override imported lights
+# name -> {"energy", "color":[r,g,b] linear, "group"}; used to override imported lights
 LIGHTS = {l["name"]: l for l in PARAMS.get("lights", [])}
 # object key -> {surface index -> emissive entry}; rebuilt because the glb drops emission textures
 EMISSIVE = {}
 for _em in PARAMS.get("emissive", []):
     EMISSIVE.setdefault(_em["object"], {})[int(_em["surface"])] = _em
+# light group names; a light or emissive surface with group "" is in the main bake
+GROUPS = list(PARAMS.get("groups", []))
+TILE = int(PARAMS.get("group_tile", 16))
+# per group: the irradiance under which its tile is dropped, invisible at its highest energy
+THRESHOLDS = [float(t) for t in PARAMS.get("group_thresholds", [])]
 
 _log = open(os.path.join(out_dir, "bake.log"), "w", encoding="utf-8")
 
@@ -62,10 +75,11 @@ def out(msg):
         pass
 
 
-def write_meta(meshes_meta, errors):
+def write_meta(meshes_meta, errors, groups_meta=()):
     meta = {
         "baked_exposure": 1.0,
         "meshes": meshes_meta,
+        "groups": list(groups_meta),
         "errors": errors,
     }
     with open(os.path.join(out_dir, "baked.json"), "w") as f:
@@ -121,13 +135,15 @@ def denoise_over(image, out_path, size):
     return False
 
 
-def setup_bake_target(me, img, obj_name):
-    """Bake into `img` without discarding real materials (so albedo/emission still drive bounces).
-    Each slot gets its own material copy with the bake-target image injected and made active."""
+def setup_bake_target(me, obj_name):
+    """Prepare a mesh to bake into without discarding real materials (so albedo/emission still
+    drive bounces): each slot gets its own material copy with a bake-target image node. Returns
+    the image nodes; bake_one gives them each bake's image."""
     if not me.materials:
         m = bpy.data.materials.new("BakeMat_%s" % obj_name)
         m.use_nodes = True
         me.materials.append(m)
+    nodes = []
     for i in range(len(me.materials)):
         m = me.materials[i]
         if m is None:
@@ -138,22 +154,29 @@ def setup_bake_target(me, img, obj_name):
             if not m.use_nodes:
                 m.use_nodes = True
         me.materials[i] = m
-        nt = m.node_tree
-        tex = nt.nodes.new("ShaderNodeTexImage")
-        tex.image = img
+        nodes.append(m.node_tree.nodes.new("ShaderNodeTexImage"))
+    return nodes
+
+
+def activate(nodes):
+    """Make each bake-target image node the active node of its material (where the bake writes)."""
+    for tex in nodes:
+        nt = tex.id_data
         for n in nt.nodes:
             n.select = False
         tex.select = True
         nt.nodes.active = tex
 
 
-def bake_one(scene, obj, slice_path, size):
+def bake_one(scene, obj, slice_path, size, nodes):
     me = obj.data
     me.uv_layers.active_index = 1 if len(me.uv_layers) >= 2 else 0
 
     img = bpy.data.images.new("LM_%s" % obj.name, width=size, height=size,
                               float_buffer=True, is_data=True)
-    setup_bake_target(me, img, obj.name)
+    for tex in nodes:
+        tex.image = img
+    activate(nodes)
 
     bpy.ops.object.select_all(action='DESELECT')
     obj.select_set(True)
@@ -168,6 +191,48 @@ def bake_one(scene, obj, slice_path, size):
     img.save()  # raw bake, kept if denoise can't produce output below
     if DENOISE and not denoise_over(img, slice_path, size):
         out("PAVLAKA_BAKE: WARNING: denoise produced no output for %s; using raw bake" % obj.name)
+    bpy.data.images.remove(img)  # one image per bake: free it (light groups bake every mesh again)
+
+
+def lit_tiles(path, threshold):
+    """The TILE x TILE tiles of a baked slice where any texel's light passes `threshold`:
+    [[x, y, w, h]] in the file's texels (top row first; edge tiles are cut to the slice), and
+    the slice's brightest value."""
+    img = bpy.data.images.load(path, check_existing=False)
+    w, h = img.size
+    px = np.empty(w * h * 4, np.float32)
+    img.pixels.foreach_get(px)
+    bpy.data.images.remove(img)
+    # Blender's pixel rows start at the bottom, the file's at the top
+    lum = px.reshape(h, w, 4)[::-1, :, :3].max(axis=2)
+    th, tw = -(-h // TILE), -(-w // TILE)
+    pad = np.zeros((th * TILE, tw * TILE), np.float32)
+    pad[:h, :w] = lum
+    peak = pad.reshape(th, TILE, tw, TILE).max(axis=(1, 3))
+    tiles = []
+    for ty, tx in zip(*np.nonzero(peak > threshold)):
+        x, y = int(tx) * TILE, int(ty) * TILE
+        tiles.append([x, y, min(TILE, w - x), min(TILE, h - y)])
+    return tiles, float(peak.max()), peak
+
+
+class Passes:
+    """Which light a bake sees: the main bake ("") has the lights and emissive surfaces of no
+    group, and the sky; a group's bake has only that group's lights and emission."""
+
+    def __init__(self, scene, sockets):
+        self.lights = [(o, LIGHTS.get(o.name, {}).get("group", "")) for o in bpy.data.objects
+                       if o.type == 'LIGHT']
+        self.sockets = sockets  # (Emission Strength socket, energy, group)
+        bg = scene.world.node_tree.nodes["Background"]
+        self.world = (bg.inputs[1], bg.inputs[1].default_value)
+
+    def set(self, group):
+        for o, g in self.lights:
+            o.hide_render = g != group
+        for sock, energy, g in self.sockets:
+            sock.default_value = energy if g == group else 0.0
+        self.world[0].default_value = self.world[1] if group == "" else 0.0
 
 
 def setup_device(scene):
@@ -278,17 +343,22 @@ def apply_emission(obj):
     """Rebuild emission from Godot's material on each slot listed in EMISSIVE, since the glb
     round-trip keeps the emission color but drops the emission texture. Overrides the Principled
     BSDF's emission inputs (clearing any from the import) with color * energy and, if present, the
-    saved texture sampled through the model's base UV."""
+    saved texture sampled through the model's base UV. Returns each slot's (Emission Strength
+    socket, energy, light group), so a bake pass can turn its emission off."""
     slots = EMISSIVE.get(obj.name)
     if not slots:
-        return
+        return []
     me = obj.data
     uv0 = me.uv_layers[0].name if me.uv_layers else ""
+    sockets = []
     for i in range(len(me.materials)):
         em = slots.get(i)
         mat = me.materials[i]
         if em is None or mat is None or not mat.use_nodes:
             continue
+        if mat.users > 1:  # shared with another mesh (the glb merges equal materials): its own copy
+            mat = mat.copy()
+            me.materials[i] = mat
         nt = mat.node_tree
         bsdf = next((n for n in nt.nodes if n.type == 'BSDF_PRINCIPLED'), None)
         if bsdf is None:
@@ -301,6 +371,7 @@ def apply_emission(obj):
             for link in list(inp.links):
                 nt.links.remove(link)
         es.default_value = float(em.get("energy", 1.0))
+        sockets.append((es, es.default_value, em.get("group", "")))
         color = em.get("color", [0.0, 0.0, 0.0])
         tex_file = em.get("texture", "")
         if not tex_file:
@@ -326,6 +397,7 @@ def apply_emission(obj):
             vm.inputs[1].default_value = (color[0], color[1], color[2])
             nt.links.new(tex.outputs["Color"], vm.inputs[0])
             nt.links.new(vm.outputs["Vector"], ec)
+    return sockets
 
 
 def main():
@@ -368,9 +440,19 @@ def main():
         if obj.type == 'LIGHT' and obj.name in LIGHTS:
             set_light(obj, LIGHTS[obj.name])
 
+    targets = [o for o in bpy.data.objects
+               if o.type == 'MESH' and len(o.data.uv_layers) >= 2]
+    targets.sort(key=lambda o: o.name)  # stable slice order
+    out("PAVLAKA_BAKE: %d lightmap target(s)" % len(targets))
+    # bake targets first get their own material copies (with the image node the bake writes),
+    # then emission is rebuilt on the materials the bake actually uses
+    bake_nodes = {o.name: setup_bake_target(o.data, o.name) for o in targets}
+    sockets = []
     for obj in bpy.data.objects:
         if obj.type == 'MESH':
-            apply_emission(obj)
+            sockets += apply_emission(obj)
+    passes = Passes(scene, sockets)
+    passes.set("")
 
     bake = scene.render.bake
     bake.use_pass_direct = True
@@ -380,14 +462,10 @@ def main():
     bake.margin_type = 'EXTEND'
     bake.use_clear = True
 
-    targets = [o for o in bpy.data.objects
-               if o.type == 'MESH' and len(o.data.uv_layers) >= 2]
-    targets.sort(key=lambda o: o.name)  # stable slice order
-    out("PAVLAKA_BAKE: %d lightmap target(s)" % len(targets))
-
     meshes_meta = []
     errors = []
     used_names = set()
+    fnames = {}
     for slice_index, obj in enumerate(targets):
         # name the slice after the node, appending an index to de-dup colliding names
         base = re.sub(r'[^A-Za-z0-9_-]', '_', obj.name) or "mesh"
@@ -397,10 +475,11 @@ def main():
             fname = "%s_%d" % (base, n)
             n += 1
         used_names.add(fname)
+        fnames[obj.name] = fname
         slice_file = fname + ".exr"
         size = int(SIZES.get(obj.name, DEFAULT_SIZE))
         try:
-            bake_one(scene, obj, os.path.join(out_dir, slice_file), size)
+            bake_one(scene, obj, os.path.join(out_dir, slice_file), size, bake_nodes[obj.name])
             meshes_meta.append({"name": obj.name, "file": slice_file})
             # drop a marker so Godot can stream this mesh into the live preview now. Write to a
             # temp file then rename so Godot's poll never reads a half-written .done.
@@ -412,9 +491,40 @@ def main():
             errors.append("%s: %s" % (obj.name, e))
             out("PAVLAKA_BAKE: ERROR baking %s:\n%s" % (obj.name, traceback.format_exc()))
 
-    write_meta(meshes_meta, errors)
-    out("PAVLAKA_BAKE: done (%d/%d slices, %d error(s))"
-        % (len(meshes_meta), len(targets), len(errors)))
+    # each light group on its own: its tiles of every mesh its light reaches
+    groups_meta = []
+    for gi, group in enumerate(GROUPS):
+        passes.set(group)
+        kept = total = 0
+        counts = {}  # tiles kept at other thresholds, to tune the threshold
+        threshold = THRESHOLDS[gi] if gi < len(THRESHOLDS) else 0.0005
+        for obj in targets:
+            slice_file = "%s.g%d.exr" % (fnames[obj.name], gi)
+            path = os.path.join(out_dir, slice_file)
+            size = int(SIZES.get(obj.name, DEFAULT_SIZE))
+            try:
+                bake_one(scene, obj, path, size, bake_nodes[obj.name])
+                tiles, peak, peaks = lit_tiles(path, threshold)
+            except Exception as e:
+                errors.append("%s (light group %s): %s" % (obj.name, group, e))
+                out("PAVLAKA_BAKE: ERROR baking %s for light group %s:\n%s"
+                    % (obj.name, group, traceback.format_exc()))
+                continue
+            total += peaks.size
+            for t in (1e-4, 1e-3, 1e-2):
+                counts[t] = counts.get(t, 0) + int((peaks > t).sum())
+            if tiles:
+                kept += len(tiles)
+                groups_meta.append({"group": gi, "name": obj.name, "file": slice_file, "tiles": tiles})
+            else:
+                os.remove(path)
+        out("PAVLAKA_BAKE: light group '%s': %d of %d tiles lit above %g (above 1e-4: %d, 1e-3: %d, 1e-2: %d)"
+            % (group, kept, total, threshold, counts.get(1e-4, 0), counts.get(1e-3, 0), counts.get(1e-2, 0)))
+    passes.set("")
+
+    write_meta(meshes_meta, errors, groups_meta)
+    out("PAVLAKA_BAKE: done (%d/%d slices, %d light group(s), %d error(s))"
+        % (len(meshes_meta), len(targets), len(GROUPS), len(errors)))
 
 
 try:

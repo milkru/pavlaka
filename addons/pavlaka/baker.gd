@@ -26,6 +26,14 @@ const DEFAULTS := {
 	"environment_custom_energy": 1.0,
 }
 
+# a light group keeps its light in tiles of GROUP_TILE x GROUP_TILE texels, where it could show:
+# where GROUP_VISIBLE (irradiance) divided by the group's highest energy (at least 1) is reached.
+# That energy is the largest of its members' metadata "light_group_max"; a member without it
+# counts as GROUP_MAX (a little over twice as baked)
+const GROUP_TILE := 16
+const GROUP_VISIBLE := 0.001
+const GROUP_MAX := 2.1
+
 
 class Target:
 	var node: MeshInstance3D
@@ -36,7 +44,31 @@ class Target:
 
 ## Bake `lm`'s scene to `save_path` (.lmbake; page EXRs go beside it). Returns OK or an error.
 ## `cancelled` is an optional [bool]: set cancelled[0] = true to abort (returns ERR_SKIP).
+## A BlenderLightmapGI's light groups stop while it bakes (the preview shows the main bake alone)
+## and start again after, whatever the outcome. A bake that fails gives the node its light data
+## from before back (the preview's layout doesn't fit its light groups).
 static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: String, opts: Dictionary = {}, cancelled: Array = []) -> int:
+	var gi := lm as BlenderLightmapGI
+	var orig_data: LightmapGIData = lm.light_data
+	var orig_bounds: AABB = gi.baked_bounds if gi else AABB()
+	if gi:
+		gi.stop_light_groups()
+		gi.baking = true
+	var err: int = await _bake(root, lm, blender_path, save_path, opts, cancelled)
+	if not is_instance_valid(lm):
+		return err
+	if err != OK and lm.light_data != orig_data:
+		if orig_data != null:
+			_assign_data(lm, orig_data, orig_bounds)
+		else:
+			lm.light_data = null
+	if gi:
+		gi.baking = false
+		gi.restart_light_groups()
+	return err
+
+
+static func _bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: String, opts: Dictionary, cancelled: Array) -> int:
 	var cfg := DEFAULTS.duplicate()
 	cfg.merge(opts, true)
 
@@ -86,10 +118,19 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 	DirAccess.make_dir_recursive_absolute(work)
 	var work_abs := ProjectSettings.globalize_path(work)
 	var glb_abs := work_abs.path_join("scene.glb")
-	var lights: Array = [] # filled with each exported light's {name, energy, color}
+	var lights: Array = [] # filled with each exported light's {name, energy, color, group}
 	# emissive surfaces, rebuilt in Blender because the glb round-trip drops emission textures
 	var emissive: Array = []
-	var export_root := _build_export_scene(root, targets, work_abs, lights, emissive)
+	# light groups: name -> {lights: [path from lm], surfaces: [[path from lm, surface]]}
+	var members := {}
+	var export_root := _build_export_scene(root, lm, targets, work_abs, lights, emissive, members)
+	var group_names := PackedStringArray(members.keys())
+	group_names.sort()
+	var thresholds: Array = []
+	for g in group_names:
+		thresholds.append(GROUP_VISIBLE / maxf(1.0, members[g]["max"]))
+	if not group_names.is_empty():
+		print("pavlaka: %d light group(s): %s" % [group_names.size(), ", ".join(group_names)])
 	if lights.is_empty():
 		print("pavlaka: no Static lights found — baking ambient only. Set a light's Bake Mode to Static to include it in the bake.")
 	var doc := GLTFDocument.new()
@@ -124,6 +165,9 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 		"sky_rotation": env.get("sky_rotation", [0.0, 0.0, 0.0]),
 		"ambient_color": env["ambient_color"],
 		"ambient_energy": env["ambient_energy"],
+		"groups": group_names,
+		"group_tile": GROUP_TILE,
+		"group_thresholds": thresholds,
 	}
 	var params_path := work + "/params.json"
 	var pf := FileAccess.open(params_path, FileAccess.WRITE)
@@ -244,7 +288,21 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 	var data := _make_data(page_texes, place_by_key, page_dims, final_keys, target_by_key, bounds,
 		float(meta.get("baked_exposure", 1.0)))
 
-	# 9. save .lmbake (to the chosen save_path) and assign
+	# 9. the light groups: their lit tiles packed into one texture, and where each goes
+	var groups: PavlakaLightGroups = null
+	if not group_names.is_empty():
+		groups = _make_groups(group_names, members, meta.get("groups", []), place_by_key, work_abs,
+			out_dir.path_join("%s_groups.exr" % base_name), page_dims[0])
+		if groups == null:
+			return ERR_FILE_CANT_READ
+		err = ResourceSaver.save(groups, out_dir.path_join("%s_groups.res" % base_name))
+		if err != OK:
+			push_error("pavlaka: saving the light groups failed: %s" % error_string(err))
+			return err
+		groups.take_over_path(out_dir.path_join("%s_groups.res" % base_name))
+	# no light groups: the files of earlier ones stay (a saved scene may still refer to them)
+
+	# 10. save .lmbake (to the chosen save_path) and assign
 	var lmbake := save_path
 	err = ResourceSaver.save(data, lmbake)
 	if err != OK:
@@ -253,14 +311,20 @@ static func bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path: 
 	# link the resource to its file so the scene references .lmbake externally, not inline
 	data.take_over_path(lmbake)
 	efs.update_file(lmbake) # let the editor track the new .lmbake file
+	if lm is BlenderLightmapGI:
+		(lm as BlenderLightmapGI).light_groups = groups
 	_assign_data(lm, data, bounds) # replaces the live preview with the final imported result
 	# drop pages from a denser previous bake. Done last; deleting mid-import corrupts the scan.
 	_cleanup_stale_pages(out_dir, base_name, n_pages)
 	var secs := (Time.get_ticks_msec() - bake_start) / 1000
 	var took := ("%d m %d s" % [secs / 60, secs % 60]) if secs >= 60 else ("%d s" % secs)
 	var dims_str := ", ".join((page_dims as Array).map(func(d): return "%dx%d" % [d.x, d.y]))
-	print("pavlaka: baked %d mesh(es) into %d page(s) [%s] in %s -> %s"
-		% [data.get_user_count(), n_pages, dims_str, took, lmbake])
+	var groups_str := ""
+	if groups:
+		@warning_ignore("integer_division")
+		groups_str = ", %d light group(s) in %d tiles" % [groups.group_count(), groups.parts.size() / 3]
+	print("pavlaka: baked %d mesh(es) into %d page(s) [%s]%s in %s -> %s"
+		% [data.get_user_count(), n_pages, dims_str, groups_str, took, lmbake])
 	return OK
 
 
@@ -404,14 +468,24 @@ static func _collect(node: Node, lm: LightmapGI, out: Array[Target]) -> void:
 # named by a unique key so results map back despite name collisions; bake.py bakes the ones
 # with a UV2. `out_lights` gets each light's {name (key), energy, color}; `out_emissive` gets each
 # emissive surface's {object, surface, color, energy, op, texture} (texture saved into work_abs).
-static func _build_export_scene(root: Node, targets: Array[Target], work_abs: String, out_lights: Array, out_emissive: Array) -> Node3D:
+static func _build_export_scene(root: Node, lm: Node, targets: Array[Target], work_abs: String,
+		out_lights: Array, out_emissive: Array, members: Dictionary) -> Node3D:
 	var node_to_key := {}
 	for t in targets:
 		node_to_key[t.node] = t.key
 	var export_root := Node3D.new()
 	export_root.name = root.name
-	_gather_into(root, export_root, node_to_key, work_abs, out_lights, out_emissive)
+	_gather_into(root, lm, export_root, node_to_key, work_abs, out_lights, out_emissive, members)
 	return export_root
+
+
+# A light group's entry in `members`, made on first use; `node` (a member) may raise its highest
+# energy (metadata "light_group_max").
+static func _member(members: Dictionary, group: String, node: Node) -> Dictionary:
+	if not members.has(group):
+		members[group] = {"lights": [], "surfaces": [], "max": 0.0}
+	members[group]["max"] = maxf(members[group]["max"], float(node.get_meta("light_group_max", GROUP_MAX)))
+	return members[group]
 
 
 # Resolve the Environment mode into bake params: a sky panorama path or flat ambient color+energy.
@@ -482,7 +556,8 @@ static func _find_environment(node: Node) -> Environment:
 	return null
 
 
-static func _gather_into(node: Node, export_root: Node3D, node_to_key: Dictionary, work_abs: String, out_lights: Array, out_emissive: Array) -> void:
+static func _gather_into(node: Node, lm: Node, export_root: Node3D, node_to_key: Dictionary, work_abs: String,
+		out_lights: Array, out_emissive: Array, members: Dictionary) -> void:
 	for c in node.get_children():
 		if c is MeshInstance3D and (c as MeshInstance3D).is_visible_in_tree() and (c as MeshInstance3D).mesh != null:
 			var mi := c as MeshInstance3D
@@ -492,11 +567,15 @@ static func _gather_into(node: Node, export_root: Node3D, node_to_key: Dictionar
 			copy.mesh = mi.mesh
 			copy.transform = mi.global_transform
 			# carry each surface's effective material so Blender bakes the real albedo/emission
+			var group := str(mi.get_meta("light_group", ""))
+			# the light its emission casts, if set apart from how bright it is drawn
+			var bake_energy: float = float(mi.get_meta("lightmap_emission_energy", -1.0))
 			for s in mi.mesh.get_surface_count():
 				var m := mi.get_active_material(s)
 				if m != null:
 					copy.set_surface_override_material(s, m)
-					_collect_emission(m, copy.name, s, work_abs, out_emissive)
+					if _collect_emission(m, copy.name, s, work_abs, out_emissive, group, bake_energy) and group != "":
+						_member(members, group, mi)["surfaces"].append([lm.get_path_to(mi), s])
 			export_root.add_child(copy)
 			copy.owner = export_root
 		elif c is Light3D and (c as Light3D).is_visible_in_tree() and (c as Light3D).light_bake_mode == Light3D.BAKE_STATIC:
@@ -509,7 +588,10 @@ static func _gather_into(node: Node, export_root: Node3D, node_to_key: Dictionar
 			export_root.add_child(lcopy)
 			lcopy.owner = export_root
 			var lin := src.light_color.srgb_to_linear()
-			var info := {"name": key, "energy": src.light_energy, "color": [lin.r, lin.g, lin.b]}
+			var group := str(src.get_meta("light_group", ""))
+			if group != "":
+				_member(members, group, src)["lights"].append(lm.get_path_to(src))
+			var info := {"name": key, "energy": src.light_energy, "color": [lin.r, lin.g, lin.b], "group": group}
 			# what Cycles needs to light as Godot draws: falloff, range, cone, size (bake.py set_light)
 			if src is OmniLight3D:
 				info.merge({"range": src.omni_range, "attenuation": src.omni_attenuation, "size": src.light_size})
@@ -519,17 +601,20 @@ static func _gather_into(node: Node, export_root: Node3D, node_to_key: Dictionar
 			elif src is DirectionalLight3D:
 				info["angular_distance"] = src.light_angular_distance
 			out_lights.append(info)
-		_gather_into(c, export_root, node_to_key, work_abs, out_lights, out_emissive)
+		_gather_into(c, lm, export_root, node_to_key, work_abs, out_lights, out_emissive, members)
 
 
 # Record an emissive surface so bake.py can rebuild it in Blender. The glb round-trip keeps the
 # emission color but drops the emission texture, so we save the texture ourselves and pass the
 # color/energy/operator. Skips non-BaseMaterial3D (e.g. ShaderMaterial) and surfaces that emit
-# nothing. Godot emission color is sRGB -> converted to linear for Cycles.
-static func _collect_emission(mat: Material, obj_key: String, surface: int, work_abs: String, out: Array) -> void:
+# nothing. Godot emission color is sRGB -> converted to linear for Cycles. `group`: the mesh's
+# light group ("" for none). `bake_energy`: the energy to bake at, when 0 or more (the mesh's
+# metadata "lightmap_emission_energy"), else the material's. Returns whether the surface emits.
+static func _collect_emission(mat: Material, obj_key: String, surface: int, work_abs: String, out: Array,
+		group: String = "", bake_energy: float = -1.0) -> bool:
 	var bm := mat as BaseMaterial3D
 	if bm == null or not bm.emission_enabled:
-		return
+		return false
 	var col := bm.emission.srgb_to_linear()
 	var tex_name := ""
 	var tex := bm.emission_texture
@@ -544,14 +629,16 @@ static func _collect_emission(mat: Material, obj_key: String, surface: int, work
 				push_warning("pavlaka: couldn't save emission texture for '%s'; using emission color only" % obj_key)
 				tex_name = ""
 	if tex_name == "" and col.r == 0.0 and col.g == 0.0 and col.b == 0.0:
-		return # emits nothing
+		return false # emits nothing
 	out.append({
 		"object": obj_key, "surface": surface,
 		"color": [col.r, col.g, col.b],
-		"energy": bm.emission_energy_multiplier,
+		"energy": bake_energy if bake_energy >= 0.0 else bm.emission_energy_multiplier,
 		"op": "add" if bm.emission_operator == BaseMaterial3D.EMISSION_OP_ADD else "multiply",
 		"texture": tex_name,
+		"group": group,
 	})
+	return true
 
 
 # map LightmapGI BakeQuality (Low/Medium/High/Ultra) to Cycles samples (denoise cleans up)
@@ -660,8 +747,14 @@ static func _pack_pages(targets: Array[Target], max_texture_size: int, texel_sca
 		page_dims[pi] = Vector2i(
 			maxi(d.x, _round_up(r.position.x + r.size.x + ATLAS_GUTTER / 2, 4)),
 			maxi(d.y, _round_up(r.position.y + r.size.y + ATLAS_GUTTER / 2, 4)))
+	# every page the size of the largest: Godot combines the pages into one texture array (its layers
+	# one size), and each mesh's UV rect is normalized by its page's size
+	var biggest := Vector2i.ZERO
+	for d in page_dims:
+		biggest = biggest.max(d)
+	biggest = biggest.min(Vector2i(cap, cap))
 	for pi in page_dims.size():
-		page_dims[pi] = (page_dims[pi] as Vector2i).min(Vector2i(cap, cap))
+		page_dims[pi] = biggest
 	return {"page_dims": page_dims, "placements": placements, "fallbacks": fallbacks}
 
 
@@ -690,6 +783,77 @@ static func _world_aabb(targets: Array[Target]) -> AABB:
 			box = box.merge(world)
 	return box.grow(0.5)
 
+
+
+# The light groups of a bake: each group's lit tiles (baked.json "groups": per mesh, its slice
+# and tiles [x, y, w, h]) packed into one texture saved at `exr_path` (always lossless: a
+# compressed import is resized, which would move the tiles), and where each tile goes in the
+# lightmap's pages of `page_size`. Returns null if a slice can't be read or the texture can't be saved.
+static func _make_groups(names: PackedStringArray, members: Dictionary, baked: Array,
+		place_by_key: Dictionary, work_abs: String, exr_path: String, page_size: Vector2i) -> PavlakaLightGroups:
+	var groups := PavlakaLightGroups.new()
+	groups.names = names
+	groups.page_size = page_size
+	for g in names:
+		var m: Dictionary = members.get(g, {"lights": [], "surfaces": []})
+		groups.lights.append(m["lights"])
+		groups.surfaces.append(m["surfaces"])
+	var count := 0
+	for entry in baked:
+		if place_by_key.has(entry["name"]):
+			count += (entry["tiles"] as Array).size()
+	if count == 0:
+		return groups # nothing of theirs lit above the threshold: emission and lights scale only
+	var t := GROUP_TILE
+	var cols := ceili(sqrt(float(count)))
+	var rows := ceili(float(count) / cols)
+	var atlas := Image.create(cols * t, rows * t, false, Image.FORMAT_RGBAF)
+	var by_cell := {} # Vector4i(page, x, y, 0) -> [w, h, [group, tile x, tile y]...]
+	var k := 0
+	for entry in baked:
+		var key: String = entry["name"]
+		if not place_by_key.has(key):
+			continue
+		var slice := Image.load_from_file(work_abs.path_join(entry["file"]))
+		if slice == null:
+			push_error("pavlaka: can't read the light group slice %s" % entry["file"])
+			return null
+		slice.convert(Image.FORMAT_RGBAF)
+		var pl: Dictionary = place_by_key[key]
+		var origin: Vector2i = (pl["rect"] as Rect2i).position
+		var group := int(entry["group"])
+		for tile in entry["tiles"]:
+			var r := Rect2i(int(tile[0]), int(tile[1]), int(tile[2]), int(tile[3]))
+			@warning_ignore("integer_division")
+			var at := Vector2i((k % cols) * t, (k / cols) * t)
+			atlas.blit_rect(slice, r, at)
+			var cell := Vector4i(int(pl["page"]), origin.x + r.position.x, origin.y + r.position.y, 0)
+			if not by_cell.has(cell):
+				by_cell[cell] = [r.size.x, r.size.y]
+			by_cell[cell].append([group, at.x, at.y])
+			k += 1
+	var cells := PackedInt32Array()
+	var parts := PackedInt32Array()
+	for cell: Vector4i in by_cell:
+		var c: Array = by_cell[cell]
+		@warning_ignore("integer_division")
+		cells.append_array(PackedInt32Array([cell.x, cell.y, cell.z, c[0], c[1], parts.size() / 3, c.size() - 2]))
+		for i in range(2, c.size()):
+			parts.append_array(PackedInt32Array(c[i]))
+	groups.cells = cells
+	groups.parts = parts
+	if atlas.save_exr(exr_path) != OK:
+		push_error("pavlaka: failed to save the light groups' tiles %s" % exr_path)
+		return null
+	_write_exr_import(exr_path, false)
+	var efs := EditorInterface.get_resource_filesystem()
+	efs.update_file(exr_path)
+	efs.reimport_files(PackedStringArray([exr_path]))
+	groups.tiles = ResourceLoader.load(exr_path, "", ResourceLoader.CACHE_MODE_IGNORE)
+	if groups.tiles == null:
+		push_error("pavlaka: failed to import the light groups' tiles %s" % exr_path)
+		return null
+	return groups
 
 
 # Write the page's .import preset, preserving any existing UID line so re-bakes keep stable UIDs.
