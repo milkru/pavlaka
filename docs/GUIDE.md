@@ -12,7 +12,9 @@ The workflow is similar to the regular `LightmapGI`.
 4. Select the `BlenderLightmapGI` node and press **Bake Lightmaps** in the 3D toolbar.
 5. After baking, disable or hide the real-time lights you baked.
 
-For imported meshes, open the Import dock, set **Meshes > Light Baking** to **Static Lightmaps**, then reimport. Meshes without UV2 are skipped.
+For imported meshes, open the Import dock, set **Meshes > Light Baking** to **Static Lightmaps**, then reimport.
+
+Only meshes whose **GI Mode** is **Static** and that have UV2 and normals take part in the bake, as with `LightmapGI`: other meshes neither catch light nor block it.
 
 Only lights with **Bake Mode** set to **Static** are baked. You can also bake ambient lighting from the environment, using a scene sky or a custom color.
 
@@ -127,7 +129,7 @@ The plugin also bakes a scene without any dialog: it opens the scene (reloading 
 
 ## Things to watch out for
 
-* Meshes without UV2 are skipped.
+* Only meshes with GI Mode Static, UV2 and normals catch or block light.
 * Only Static lights are baked.
 * Real-time lights should usually be disabled after baking.
 * Very high `Texel Scale`, `Quality`, or `Bounces` values can make bakes much slower.

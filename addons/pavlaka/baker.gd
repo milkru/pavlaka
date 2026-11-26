@@ -452,8 +452,7 @@ static func _cleanup_stale_pages(out_dir: String, base_name: String, n_pages: in
 static func _collect(node: Node, lm: LightmapGI, out: Array[Target]) -> void:
 	if node is MeshInstance3D:
 		var mi := node as MeshInstance3D
-		# hidden meshes don't bake (and are pruned from the export); skip them as targets
-		if mi.visible and mi.gi_mode == GeometryInstance3D.GI_MODE_STATIC and _has_uv2(mi.mesh):
+		if _bakes(mi):
 			var t := Target.new()
 			t.node = mi
 			t.path = lm.get_path_to(mi)
@@ -464,9 +463,9 @@ static func _collect(node: Node, lm: LightmapGI, out: Array[Target]) -> void:
 		_collect(c, lm, out)
 
 
-# Build a flat world-space export scene of visible meshes + static lights. Each mesh copy is
-# named by a unique key so results map back despite name collisions; bake.py bakes the ones
-# with a UV2. `out_lights` gets each light's {name (key), energy, color}; `out_emissive` gets each
+# Build a flat world-space export scene of the meshes that bake (_bakes) + static lights. Each
+# mesh copy is named by a unique key so results map back despite name collisions.
+# `out_lights` gets each light's {name (key), energy, color}; `out_emissive` gets each
 # emissive surface's {object, surface, color, energy, op, texture} (texture saved into work_abs).
 static func _build_export_scene(root: Node, lm: Node, targets: Array[Target], work_abs: String,
 		out_lights: Array, out_emissive: Array, members: Dictionary) -> Node3D:
@@ -559,7 +558,7 @@ static func _find_environment(node: Node) -> Environment:
 static func _gather_into(node: Node, lm: Node, export_root: Node3D, node_to_key: Dictionary, work_abs: String,
 		out_lights: Array, out_emissive: Array, members: Dictionary) -> void:
 	for c in node.get_children():
-		if c is MeshInstance3D and (c as MeshInstance3D).is_visible_in_tree() and (c as MeshInstance3D).mesh != null:
+		if c is MeshInstance3D and _bakes(c as MeshInstance3D):
 			var mi := c as MeshInstance3D
 			var copy := MeshInstance3D.new()
 			# targets keep their unique key; occluders get a unique fallback so glTF never renames
@@ -650,17 +649,29 @@ static func _samples_for_quality(q: int) -> int:
 	return 128          # Medium (default)
 
 
-static func _has_uv2(mesh: Mesh) -> bool:
-	# check arrays, not surface_get_format() (ArrayMesh-only); surface_get_arrays() works on all
-	if mesh == null:
+# Whether a mesh takes part in the bake, as in Godot's LightmapGI (lightmap_gi.cpp,
+# _find_meshes_and_lights): visible in the tree, GI mode Static, and every triangle surface with
+# UV2 and normals (one at least). Others neither catch nor block light.
+static func _bakes(mi: MeshInstance3D) -> bool:
+	var mesh := mi.mesh
+	if mesh == null or not mi.is_visible_in_tree() or mi.gi_mode != GeometryInstance3D.GI_MODE_STATIC:
 		return false
+	var found := false
 	for s in mesh.get_surface_count():
-		var arrays := mesh.surface_get_arrays(s)
-		if arrays.size() > Mesh.ARRAY_TEX_UV2:
-			var uv2 = arrays[Mesh.ARRAY_TEX_UV2]
-			if uv2 != null and uv2.size() > 0:
-				return true
-	return false
+		if mesh is ArrayMesh:
+			var am := mesh as ArrayMesh
+			if am.surface_get_primitive_type(s) != Mesh.PRIMITIVE_TRIANGLES:
+				continue
+			var need := Mesh.ARRAY_FORMAT_TEX_UV2 | Mesh.ARRAY_FORMAT_NORMAL
+			if (am.surface_get_format(s) & need) != need:
+				return false
+		else:  # surface_get_format() is ArrayMesh-only: read the arrays
+			var arrays := mesh.surface_get_arrays(s)
+			for a in [Mesh.ARRAY_TEX_UV2, Mesh.ARRAY_NORMAL]:
+				if arrays.size() <= a or arrays[a] == null or arrays[a].size() == 0:
+					return false
+		found = true
+	return found
 
 
 # px gutter kept between packed meshes so neighbours can't bleed into each other
