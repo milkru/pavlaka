@@ -26,7 +26,8 @@ extends LightmapGI
 ##
 ## Off (default): lossless, exact-fit pages that respect Max Texture Size. Best quality, most VRAM.
 ## On: ~4x less VRAM, but pages round up to a power of two (may exceed Max Texture Size) and
-## smooth gradients can band slightly. Use only when lightmap VRAM is a real concern.
+## smooth gradients can band slightly. Use only when lightmap VRAM is a real concern. With light
+## groups the GPU also keeps two uncompressed copies of each page, so it saves little there.
 @export var compress_lightmaps: bool = false
 
 

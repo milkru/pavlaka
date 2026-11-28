@@ -7,6 +7,9 @@ extends Resource
 ## tiles of the lightmap each group lights. BlenderLightmapGI adds them back to the lightmap at
 ## the strength set by set_light_group_energy(), and scales the group's lights and emission to match.
 
+## The side of a tile, in texels: a group keeps its light in the tiles where it could show.
+const TILE := 16
+
 ## The groups' names.
 @export var names: PackedStringArray
 ## The bake's page size, in texels: where `cells` are (an imported page may be stored scaled).

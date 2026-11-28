@@ -26,11 +26,10 @@ const DEFAULTS := {
 	"environment_custom_energy": 1.0,
 }
 
-# a light group keeps its light in tiles of GROUP_TILE x GROUP_TILE texels, where it could show:
+# a light group keeps its light in tiles of PavlakaLightGroups.TILE texels square, where it could show:
 # where GROUP_VISIBLE (irradiance) divided by the group's highest energy (at least 1) is reached.
 # That energy is the largest of its members' metadata "light_group_max"; a member without it
 # counts as GROUP_MAX (a little over twice as baked)
-const GROUP_TILE := 16
 const GROUP_VISIBLE := 0.001
 const GROUP_MAX := 2.1
 
@@ -117,6 +116,7 @@ static func _bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path:
 	var work := "user://pavlaka_tmp"
 	DirAccess.make_dir_recursive_absolute(work)
 	var work_abs := ProjectSettings.globalize_path(work)
+	_clear_work(work_abs) # nothing a previous bake left (results, slices, markers) is read as this one's
 	var glb_abs := work_abs.path_join("scene.glb")
 	var lights: Array = [] # filled with each exported light's {name, energy, color, group}
 	# emissive surfaces, rebuilt in Blender because the glb round-trip drops emission textures
@@ -166,7 +166,7 @@ static func _bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path:
 		"ambient_color": env["ambient_color"],
 		"ambient_energy": env["ambient_energy"],
 		"groups": group_names,
-		"group_tile": GROUP_TILE,
+		"group_tile": PavlakaLightGroups.TILE,
 		"group_thresholds": thresholds,
 	}
 	var params_path := work + "/params.json"
@@ -184,8 +184,6 @@ static func _bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path:
 		page_imgs.append(Image.create(d.x, d.y, false, Image.FORMAT_RGBAF))
 	var bounds := _world_aabb(targets)
 	var composited := {} # mesh name -> true (already blitted into page_imgs)
-	var orig_data: LightmapGIData = lm.light_data # restored if the bake is cancelled
-	_clear_markers(work_abs) # drop any .done markers left by a previous bake in this temp dir
 
 	# run Blender non-blocking, polling each frame so the editor stays responsive (logs to bake.log)
 	print("pavlaka: running Blender...")
@@ -196,8 +194,7 @@ static func _bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path:
 	while OS.is_process_running(pid):
 		if not cancelled.is_empty() and cancelled[0]:
 			OS.kill(pid)
-			lm.light_data = orig_data # undo any live-preview assignment
-			print("pavlaka: bake cancelled")
+			print("pavlaka: bake cancelled") # bake() gives the node its light data from before back
 			return ERR_SKIP
 		# stream each finished mesh into the live preview the moment its marker appears
 		var streamed := false
@@ -215,10 +212,12 @@ static func _bake(root: Node3D, lm: LightmapGI, blender_path: String, save_path:
 		await Engine.get_main_loop().process_frame
 
 	# 5. read bake metadata; only dump bake.log to the console if something went wrong
+	var exit_code := OS.get_process_exit_code(pid)
 	var meta_str := FileAccess.get_file_as_string(work + "/baked.json")
-	if meta_str.is_empty():
+	if exit_code != 0 or meta_str.is_empty():
 		_dump_blender_log(work_abs)
-		push_error("pavlaka: Blender exited 0 but wrote no result (see Blender log above)")
+		push_error("pavlaka: Blender exited with code %d%s (see Blender log above)"
+			% [exit_code, " and wrote no result" if meta_str.is_empty() else ""])
 		return ERR_FILE_CANT_READ
 	var meta: Dictionary = JSON.parse_string(meta_str)
 	var baked_meshes: Array = meta.get("meshes", [])
@@ -406,18 +405,13 @@ static func _read_done_markers(work_abs: String, composited: Dictionary) -> Arra
 	return out
 
 
-# Delete .done markers left in the temp dir by a previous bake, so they aren't read as new.
-static func _clear_markers(work_abs: String) -> void:
+# Delete every file a previous bake left in the temp dir.
+static func _clear_work(work_abs: String) -> void:
 	var dir := DirAccess.open(work_abs)
 	if dir == null:
 		return
-	dir.list_dir_begin()
-	var f := dir.get_next()
-	while f != "":
-		if f.ends_with(".done"):
-			dir.remove(f)
-		f = dir.get_next()
-	dir.list_dir_end()
+	for f in dir.get_files():
+		dir.remove(f)
 
 
 static func _dump_blender_log(out_dir: String) -> void:
@@ -561,8 +555,7 @@ static func _gather_into(node: Node, lm: Node, export_root: Node3D, node_to_key:
 		if c is MeshInstance3D and _bakes(c as MeshInstance3D):
 			var mi := c as MeshInstance3D
 			var copy := MeshInstance3D.new()
-			# targets keep their unique key; occluders get a unique fallback so glTF never renames
-			copy.name = node_to_key.get(mi, "occ_%d" % mi.get_instance_id())
+			copy.name = node_to_key[mi] # its unique key, so glTF never renames it
 			copy.mesh = mi.mesh
 			copy.transform = mi.global_transform
 			# carry each surface's effective material so Blender bakes the real albedo/emission
@@ -688,8 +681,8 @@ static func _world_surface_area(mi: MeshInstance3D) -> float:
 	for s in mesh.get_surface_count():
 		var arrays := mesh.surface_get_arrays(s)
 		var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
-		var idx: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
-		if idx.size() >= 3:
+		var idx = arrays[Mesh.ARRAY_INDEX] # null for a mesh without indices
+		if idx != null and idx.size() >= 3:
 			for i in range(0, idx.size() - 2, 3):
 				area += 0.5 * (xform * verts[idx[i + 1]] - xform * verts[idx[i]]).cross(
 					xform * verts[idx[i + 2]] - xform * verts[idx[i]]).length()
@@ -815,7 +808,7 @@ static func _make_groups(names: PackedStringArray, members: Dictionary, baked: A
 			count += (entry["tiles"] as Array).size()
 	if count == 0:
 		return groups # nothing of theirs lit above the threshold: emission and lights scale only
-	var t := GROUP_TILE
+	var t := PavlakaLightGroups.TILE
 	var cols := ceili(sqrt(float(count)))
 	var rows := ceili(float(count) / cols)
 	var atlas := Image.create(cols * t, rows * t, false, Image.FORMAT_RGBAF)

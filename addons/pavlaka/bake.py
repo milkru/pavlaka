@@ -197,7 +197,7 @@ def bake_one(scene, obj, slice_path, size, nodes):
 def lit_tiles(path, threshold):
     """The TILE x TILE tiles of a baked slice where any texel's light passes `threshold`:
     [[x, y, w, h]] in the file's texels (top row first; edge tiles are cut to the slice), and
-    the slice's brightest value."""
+    every tile's brightest value (an array, rows of tiles)."""
     img = bpy.data.images.load(path, check_existing=False)
     w, h = img.size
     px = np.empty(w * h * 4, np.float32)
@@ -213,7 +213,7 @@ def lit_tiles(path, threshold):
     for ty, tx in zip(*np.nonzero(peak > threshold)):
         x, y = int(tx) * TILE, int(ty) * TILE
         tiles.append([x, y, min(TILE, w - x), min(TILE, h - y)])
-    return tiles, float(peak.max()), peak
+    return tiles, peak
 
 
 class Passes:
@@ -504,7 +504,7 @@ def main():
             size = int(SIZES.get(obj.name, DEFAULT_SIZE))
             try:
                 bake_one(scene, obj, path, size, bake_nodes[obj.name])
-                tiles, peak, peaks = lit_tiles(path, threshold)
+                tiles, peaks = lit_tiles(path, threshold)
             except Exception as e:
                 errors.append("%s (light group %s): %s" % (obj.name, group, e))
                 out("PAVLAKA_BAKE: ERROR baking %s for light group %s:\n%s"

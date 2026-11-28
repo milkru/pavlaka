@@ -10,7 +10,7 @@ The workflow is similar to the regular `LightmapGI`.
 2. Make sure your static meshes have a **UV2** lightmap channel.
 3. Add at least one light and set its **Bake Mode** to **Static**.
 4. Select the `BlenderLightmapGI` node and press **Bake Lightmaps** in the 3D toolbar.
-5. After baking, disable or hide the real-time lights you baked.
+5. Keep the lights you baked: Godot doesn't draw a Static light's real-time light on lightmapped meshes.
 
 For imported meshes, open the Import dock, set **Meshes > Light Baking** to **Static Lightmaps**, then reimport.
 
@@ -26,9 +26,9 @@ Your materials are included in the bake. Colored surfaces cast colored bounce li
 
 ## After baking
 
-Disable or hide the real-time lights you baked. Otherwise, the static geometry will be lit twice: once by the baked lightmap, and once by the live light.
+Godot skips a light whose **Bake Mode** is **Static** on every mesh that uses the lightmap, so baked geometry isn't lit twice. The light still lights dynamic objects (characters, moving props) and casts their shadows. Hide a baked light only if dynamic objects shouldn't get it.
 
-You can keep real-time lights enabled if you want them as extra fill, but the result will usually look brighter and flatter.
+A light left on **Dynamic** isn't baked and lights everything in real time, on top of the lightmap.
 
 ## Settings
 
@@ -46,7 +46,7 @@ All settings live on the `BlenderLightmapGI` node.
 | `use_gpu`                                     | Bakes on the GPU when enabled. Turn it off to bake on the CPU instead.                                                           |
 | `bake_margin`                                 | Controls how far the bake bleeds past each UV island, in pixels. Increase it if you see dark seams.                              |
 | `indirect_clamp`                              | Helps remove fireflies, which are bright speckles in noisy bakes. `0` disables it. Try around `10` if needed.                    |
-| `compress_lightmaps`                          | Reduces GPU memory use by roughly 4x, with some quality loss. Off by default.                                                    |
+| `compress_lightmaps`                          | Reduces GPU memory use by roughly 4x, with some quality loss. Off by default. With light groups the GPU also keeps two uncompressed copies of each page, so it saves little there. |
 
 ## Choosing the Blender executable
 
@@ -102,7 +102,9 @@ extends EditorScript
 func _run() -> void:
     var root := EditorInterface.get_edited_scene_root()
     var lm: BlenderLightmapGI = root.find_child("BlenderLightmapGI", true, false)
-    var blender: String = ProjectSettings.get_setting("pavlaka/blender_path", "")
+    var blender := OS.get_environment("PAVLAKA_BLENDER")
+    if not FileAccess.file_exists(blender):
+        blender = ProjectSettings.get_setting("pavlaka/blender_path", "")
 
     var err: int = await PavlakaBaker.bake(
         root,
@@ -131,7 +133,7 @@ The plugin also bakes a scene without any dialog: it opens the scene (reloading 
 
 * Only meshes with GI Mode Static, UV2 and normals catch or block light.
 * Only Static lights are baked.
-* Real-time lights should usually be disabled after baking.
+* Static lights stay on after baking: they light only dynamic objects then.
 * Very high `Texel Scale`, `Quality`, or `Bounces` values can make bakes much slower.
 * `bake_margin` can help with seams, but it cannot fix bad UV2 unwraps.
-* `compress_lightmaps` saves memory, but can slightly reduce quality.
+* `compress_lightmaps` saves memory, but can slightly reduce quality; with light groups it saves little.

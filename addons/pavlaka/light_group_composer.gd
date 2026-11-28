@@ -66,7 +66,6 @@ const ROW := 65535 # most workgroups in one dispatch dimension
 ## last one shown): two nodes may share one LightmapGIData (a duplicated node, a map loaded twice).
 static var _bound := {}
 
-var tile := 16
 var _rd: RenderingDevice
 var _id := 0               # this composer's instance id (PREDELETE can't ask for it)
 var _lightmap := RID()     # RenderingServer: the LightmapGIData's lightmap
@@ -99,8 +98,6 @@ func start(data: LightmapGIData, groups: PavlakaLightGroups, energies: PackedFlo
 		if t == null:
 			return false
 		page_rids.append(t.get_rid())
-		if groups.page_size == Vector2i.ZERO:  # a bake from before page_size was kept
-			size = size.max(Vector2i(t.get_width(), t.get_height()))
 	var tiles_rid: RID = groups.tiles.get_rid() if groups.tiles else RID()
 	_data = data
 	_groups = groups
@@ -220,7 +217,7 @@ func _start(page_rids: Array[RID], size: Vector2i, tiles_rid: RID, cells: Packed
 	_rd.compute_list_end()
 	# the groups
 	if _cells > 0 and tiles_rid.is_valid():
-		var shader := _shader(COMPOSE % [tile, tile])
+		var shader := _shader(COMPOSE % [PavlakaLightGroups.TILE, PavlakaLightGroups.TILE])
 		_compose = _keep(_rd.compute_pipeline_create(shader))
 		var cells_buf := _keep(_rd.storage_buffer_create(cells.size() * 4, cells.to_byte_array()))
 		var parts_buf := _keep(_rd.storage_buffer_create(maxi(parts.size(), 1) * 4,
