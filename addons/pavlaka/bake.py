@@ -12,6 +12,11 @@ Real materials are kept (the bake-target image node is injected into each mesh's
 material rather than replacing it), so indirect bounces pick up surface albedo and emissive
 materials cast light.
 
+Meshes are joined into batches (join_batches) and each batch bakes in one bake: Cycles bakes all
+the images of one object in one render session, and a session's start is most of a small mesh's
+bake. Each mesh still gets its own image and slice. A mesh that joining would change (mirrored or
+unevenly scaled) bakes alone.
+
 Light groups (params "groups"): lights and emissive surfaces in a group are left out of the main
 bake; each group is baked again on its own (only its lights and emission, no sky), so the game can
 add it to the lightmap at any strength. Light adds up, so the main bake plus every group at full
@@ -62,6 +67,10 @@ GROUPS = list(PARAMS.get("groups", []))
 TILE = int(PARAMS.get("group_tile", 16))
 # per group: the irradiance under which its tile is dropped, invisible at its highest energy
 THRESHOLDS = [float(t) for t in PARAMS.get("group_thresholds", [])]
+# lightmap texels of one batch (join_batches): Blender keeps about 85 bytes a texel while it bakes
+# (measured), so about 180 MB; a mesh with more bakes alone
+BATCH_TEXELS = 1 << 21
+MAX_SLOTS = 32000  # material slots of a joined object: Blender keeps at most 32766
 
 _log = open(os.path.join(out_dir, "bake.log"), "w", encoding="utf-8")
 
@@ -138,7 +147,7 @@ def denoise_over(image, out_path, size):
 def setup_bake_target(me, obj_name):
     """Prepare a mesh to bake into without discarding real materials (so albedo/emission still
     drive bounces): each slot gets its own material copy with a bake-target image node. Returns
-    the image nodes; bake_one gives them each bake's image."""
+    the image nodes; bake_batch gives them each bake's image."""
     if not me.materials:
         m = bpy.data.materials.new("BakeMat_%s" % obj_name)
         m.use_nodes = True
@@ -168,30 +177,101 @@ def activate(nodes):
         nt.nodes.active = tex
 
 
-def bake_one(scene, obj, slice_path, size, nodes):
-    me = obj.data
-    me.uv_layers.active_index = 1 if len(me.uv_layers) >= 2 else 0
+def size_of(name):
+    """A mesh's slice size (px)."""
+    return int(SIZES.get(name, DEFAULT_SIZE))
 
-    img = bpy.data.images.new("LM_%s" % obj.name, width=size, height=size,
-                              float_buffer=True, is_data=True)
-    for tex in nodes:
-        tex.image = img
-    activate(nodes)
 
-    bpy.ops.object.select_all(action='DESELECT')
-    obj.select_set(True)
-    bpy.context.view_layer.objects.active = obj
+def joinable(obj):
+    """Whether a mesh bakes the same joined to others: its transform only turns, moves and scales
+    it evenly (joined, a mirrored or unevenly scaled mesh's normals come out wrong), it can be
+    selected, and nothing hangs off it (joining takes children off their parent)."""
+    m = np.array(obj.matrix_world)[:3, :3]
+    g = m.T @ m
+    k = np.trace(g) / 3
+    return (np.linalg.det(m) > 0 and np.abs(g - k * np.eye(3)).max() <= 1e-6 * k
+            and not obj.children and obj.visible_get() and not obj.hide_select)
 
-    scene.cycles.samples = SAMPLES
-    bpy.ops.object.bake(type='DIFFUSE', pass_filter={'DIRECT', 'INDIRECT'},
-                        margin=MARGIN, use_clear=True)
 
-    img.filepath_raw = slice_path
-    img.file_format = 'OPEN_EXR'
-    img.save()  # raw bake, kept if denoise can't produce output below
-    if DENOISE and not denoise_over(img, slice_path, size):
-        out("PAVLAKA_BAKE: WARNING: denoise produced no output for %s; using raw bake" % obj.name)
-    bpy.data.images.remove(img)  # one image per bake: free it (light groups bake every mesh again)
+def join_batches(targets):
+    """Join the targets, in their order, into objects of at most BATCH_TEXELS texels of lightmap
+    and MAX_SLOTS materials, one bake each (bake_batch). The meshes of a batch have the same UV
+    layer names (joining merges layers by name; materials refer to them by name); a mesh that
+    isn't `joinable` is a batch of its own. Returns [(object, [its meshes' names], error)]: the
+    object None and the error where joining failed. The targets' other objects are gone."""
+    batches, texels, slots, layers, open_batch = [], 0, 0, None, False
+    for obj in targets:
+        size, uvs, n = size_of(obj.name), [layer.name for layer in obj.data.uv_layers], len(obj.data.materials)
+        ok = joinable(obj)
+        if not (open_batch and ok and uvs == layers and texels + size * size <= BATCH_TEXELS
+                and slots + n <= MAX_SLOTS):
+            batches.append([])
+            texels, slots, layers = 0, 0, uvs
+        batches[-1].append(obj)
+        texels += size * size
+        slots += n
+        open_batch = ok
+    joined = []
+    for objs in batches:
+        names = [o.name for o in objs]
+        try:
+            faces = sum(len(o.data.polygons) for o in objs)
+            bpy.ops.object.select_all(action='DESELECT')
+            for o in objs:
+                o.select_set(True)
+            bpy.context.view_layer.objects.active = objs[0]
+            if len(objs) > 1:
+                bpy.ops.object.join()
+            obj = bpy.context.view_layer.objects.active
+            if len(obj.data.polygons) != faces:  # a join can leave meshes out without an error
+                raise RuntimeError("joined %d of %d faces" % (len(obj.data.polygons), faces))
+            obj.data.uv_layers.active_index = 1  # the bake's UVs: Godot's UV2
+            joined.append((obj, names, None))
+        except Exception as e:
+            out("PAVLAKA_BAKE: ERROR joining %s:\n%s" % (", ".join(names), traceback.format_exc()))
+            joined.append((None, names, e))
+    return joined
+
+
+def bake_batch(scene, obj, slices):
+    """Bake the meshes joined in `obj` (join_batches) in one bake, each into its own image, and
+    save each image (denoised) as its slice: slices [(mesh name, path, size, image nodes)].
+    Returns {mesh name: error} for the slices not saved (every one when the bake failed); the
+    errors are logged."""
+    imgs = []
+    try:
+        try:
+            for name, path, size, nodes in slices:
+                img = bpy.data.images.new("LM_%s" % name, width=size, height=size,
+                                          float_buffer=True, is_data=True)
+                imgs.append(img)
+                for tex in nodes:
+                    tex.image = img
+                activate(nodes)
+            bpy.ops.object.select_all(action='DESELECT')
+            obj.select_set(True)
+            bpy.context.view_layer.objects.active = obj
+            scene.cycles.samples = SAMPLES
+            bpy.ops.object.bake(type='DIFFUSE', pass_filter={'DIRECT', 'INDIRECT'},
+                                margin=MARGIN, use_clear=True)
+        except Exception as e:
+            out("PAVLAKA_BAKE: ERROR baking %s:\n%s" % (", ".join(sl[0] for sl in slices), traceback.format_exc()))
+            return {sl[0]: e for sl in slices}
+        failed = {}
+        for (name, path, size, _), img in zip(slices, imgs):
+            try:
+                img.filepath_raw = path
+                img.file_format = 'OPEN_EXR'
+                img.save()  # raw bake, kept if denoise can't produce output below
+                if DENOISE and not denoise_over(img, path, size):
+                    out("PAVLAKA_BAKE: WARNING: denoise produced no output for %s; using raw bake" % name)
+            except Exception as e:
+                out("PAVLAKA_BAKE: ERROR saving %s:\n%s" % (name, traceback.format_exc()))
+                failed[name] = e
+        return failed
+    finally:
+        for img in imgs:  # free them: light groups bake every mesh again
+            bpy.data.images.remove(img)
 
 
 def lit_tiles(path, threshold):
@@ -444,6 +524,9 @@ def main():
                if o.type == 'MESH' and len(o.data.uv_layers) >= 2]
     targets.sort(key=lambda o: o.name)  # stable slice order
     out("PAVLAKA_BAKE: %d lightmap target(s)" % len(targets))
+    for o in targets:
+        if o.data.users > 1:  # each its own mesh: its own materials and image (and joined apart)
+            o.data = o.data.copy()
     # bake targets first get their own material copies (with the image node the bake writes),
     # then emission is rebuilt on the materials the bake actually uses
     bake_nodes = {o.name: setup_bake_target(o.data, o.name) for o in targets}
@@ -462,34 +545,45 @@ def main():
     bake.margin_type = 'EXTEND'
     bake.use_clear = True
 
-    meshes_meta = []
-    errors = []
+    names = [o.name for o in targets]
     used_names = set()
     fnames = {}
-    for slice_index, obj in enumerate(targets):
+    for name in names:
         # name the slice after the node, appending an index to de-dup colliding names
-        base = re.sub(r'[^A-Za-z0-9_-]', '_', obj.name) or "mesh"
+        base = re.sub(r'[^A-Za-z0-9_-]', '_', name) or "mesh"
         fname = base
         n = 1
         while fname in used_names:
             fname = "%s_%d" % (base, n)
             n += 1
         used_names.add(fname)
-        fnames[obj.name] = fname
-        slice_file = fname + ".exr"
-        size = int(SIZES.get(obj.name, DEFAULT_SIZE))
-        try:
-            bake_one(scene, obj, os.path.join(out_dir, slice_file), size, bake_nodes[obj.name])
-            meshes_meta.append({"name": obj.name, "file": slice_file})
+        fnames[name] = fname
+    batches = join_batches(targets)
+    out("PAVLAKA_BAKE: %d bake(s) per pass" % len(batches))
+
+    def slices(batch, suffix):
+        return [(n, os.path.join(out_dir, fnames[n] + suffix), size_of(n), bake_nodes[n]) for n in batch]
+
+    def bake(obj, batch, joining, suffix):
+        """{mesh name: error} of a batch's bake (bake_batch), every mesh failed where it didn't join."""
+        return {n: joining for n in batch} if obj is None else bake_batch(scene, obj, slices(batch, suffix))
+
+    meshes_meta = []
+    errors = []
+    for obj, batch, joining in batches:
+        failed = bake(obj, batch, joining, ".exr")
+        for name in batch:
+            if name in failed:
+                errors.append("%s: %s" % (name, failed[name]))
+                continue
+            slice_file = fnames[name] + ".exr"
+            meshes_meta.append({"name": name, "file": slice_file})
             # drop a marker so Godot can stream this mesh into the live preview now. Write to a
             # temp file then rename so Godot's poll never reads a half-written .done.
-            done_path = os.path.join(out_dir, fname + ".done")
+            done_path = os.path.join(out_dir, fnames[name] + ".done")
             with open(done_path + ".tmp", "w") as _mf:
-                json.dump({"name": obj.name, "file": slice_file}, _mf)
+                json.dump({"name": name, "file": slice_file}, _mf)
             os.replace(done_path + ".tmp", done_path)
-        except Exception as e:
-            errors.append("%s: %s" % (obj.name, e))
-            out("PAVLAKA_BAKE: ERROR baking %s:\n%s" % (obj.name, traceback.format_exc()))
 
     # each light group on its own: its tiles of every mesh its light reaches
     groups_meta = []
@@ -498,33 +592,36 @@ def main():
         kept = total = 0
         counts = {}  # tiles kept at other thresholds, to tune the threshold
         threshold = THRESHOLDS[gi] if gi < len(THRESHOLDS) else 0.0005
-        for obj in targets:
-            slice_file = "%s.g%d.exr" % (fnames[obj.name], gi)
-            path = os.path.join(out_dir, slice_file)
-            size = int(SIZES.get(obj.name, DEFAULT_SIZE))
-            try:
-                bake_one(scene, obj, path, size, bake_nodes[obj.name])
-                tiles, peaks = lit_tiles(path, threshold)
-            except Exception as e:
-                errors.append("%s (light group %s): %s" % (obj.name, group, e))
-                out("PAVLAKA_BAKE: ERROR baking %s for light group %s:\n%s"
-                    % (obj.name, group, traceback.format_exc()))
-                continue
-            total += peaks.size
-            for t in (1e-4, 1e-3, 1e-2):
-                counts[t] = counts.get(t, 0) + int((peaks > t).sum())
-            if tiles:
-                kept += len(tiles)
-                groups_meta.append({"group": gi, "name": obj.name, "file": slice_file, "tiles": tiles})
-            else:
-                os.remove(path)
+        for obj, batch, joining in batches:
+            failed = bake(obj, batch, joining, ".g%d.exr" % gi)
+            for name in batch:
+                if name in failed:
+                    errors.append("%s (light group %s): %s" % (name, group, failed[name]))
+                    continue
+                slice_file = "%s.g%d.exr" % (fnames[name], gi)
+                path = os.path.join(out_dir, slice_file)
+                try:
+                    tiles, peaks = lit_tiles(path, threshold)
+                except Exception as e:
+                    errors.append("%s (light group %s): %s" % (name, group, e))
+                    out("PAVLAKA_BAKE: ERROR reading %s for light group %s:\n%s"
+                        % (name, group, traceback.format_exc()))
+                    continue
+                total += peaks.size
+                for t in (1e-4, 1e-3, 1e-2):
+                    counts[t] = counts.get(t, 0) + int((peaks > t).sum())
+                if tiles:
+                    kept += len(tiles)
+                    groups_meta.append({"group": gi, "name": name, "file": slice_file, "tiles": tiles})
+                else:
+                    os.remove(path)
         out("PAVLAKA_BAKE: light group '%s': %d of %d tiles lit above %g (above 1e-4: %d, 1e-3: %d, 1e-2: %d)"
             % (group, kept, total, threshold, counts.get(1e-4, 0), counts.get(1e-3, 0), counts.get(1e-2, 0)))
     passes.set("")
 
     write_meta(meshes_meta, errors, groups_meta)
     out("PAVLAKA_BAKE: done (%d/%d slices, %d light group(s), %d error(s))"
-        % (len(meshes_meta), len(targets), len(GROUPS), len(errors)))
+        % (len(meshes_meta), len(names), len(GROUPS), len(errors)))
 
 
 try:
